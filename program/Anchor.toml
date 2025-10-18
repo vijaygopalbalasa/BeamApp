@@ -1,0 +1,13 @@
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[programs.localnet]
+beam = "6BjVpGR1pGJ41xDJF4mMuvC7vymFBZ8QXxoRKFqsuDDi"
+
+[test]
+startup_wait = 30000
+
+[test.validator]
+url = "http://127.0.0.1:9909"
+reset = true

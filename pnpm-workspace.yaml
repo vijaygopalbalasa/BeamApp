@@ -1,0 +1,4 @@
+packages:
+  - 'program'
+  - 'mobile/*'
+  - 'verifier'

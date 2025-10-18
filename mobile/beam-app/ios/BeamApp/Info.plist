@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Beam</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
+
+	<!-- Camera Permission -->
+	<key>NSCameraUsageDescription</key>
+	<string>Beam needs access to your camera to scan QR codes for payments and merchant identification.</string>
+
+	<!-- Microphone Permission (required by react-native-camera) -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Beam needs access to your microphone for camera functionality.</string>
+
+	<!-- Photo Library Permissions -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Beam needs access to your photo library to save QR codes and receipts.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Beam needs access to save QR codes and receipts to your photo library.</string>
+
+	<!-- Location Permissions (required for BLE scanning) -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Beam needs your location to discover nearby payment terminals via Bluetooth.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Beam needs your location to discover nearby payment terminals via Bluetooth, even in the background.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Beam needs your location to discover nearby payment terminals via Bluetooth, even in the background.</string>
+
+	<!-- Bluetooth Permissions -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Beam uses Bluetooth to communicate with payment terminals for secure, peer-to-peer transactions.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Beam uses Bluetooth to communicate with payment terminals for secure, peer-to-peer transactions.</string>
+
+	<!-- Face ID / Touch ID -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Beam uses Face ID to secure your wallet and authorize transactions.</string>
+
+	<!-- Background Modes -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+		<string>location</string>
+	</array>
+</dict>
+</plist>

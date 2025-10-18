@@ -1,0 +1,5 @@
+dist/
+android/
+ios/
+metro.log
+node_modules/
