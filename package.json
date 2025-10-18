@@ -1,0 +1,31 @@
+{
+  "name": "beam-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Beam - Offline-first P2P payments on Solana with escrow",
+  "workspaces": [
+    "mobile/merchant-app",
+    "mobile/customer-app",
+    "mobile/shared",
+    "verifier",
+    "program"
+  ],
+  "scripts": {
+    "install:all": "pnpm install && cd program && cargo build",
+    "dev:verifier": "pnpm --filter verifier dev",
+    "dev:validator": "solana-test-validator --reset",
+    "build:program": "cd program && anchor build",
+    "test:program": "cd program && anchor test",
+    "test:all": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}
