@@ -163,46 +163,32 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
     }
 
     const faucetUrl = `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}`;
+    const circleFaucetUrl = 'https://faucet.circle.com/';
+
     setRequestingUsdc(true);
     try {
-      const result = await faucetService.requestUsdc(pubkey.toBase58());
-      const summaryParts: string[] = [];
-      if (typeof result.amount === 'number' && result.amount > 0) {
-        summaryParts.push(`Amount: ${result.amount}`);
-      }
-      if (result.message) {
-        summaryParts.push(result.message);
-      }
-      if (result.signature) {
-        summaryParts.push(`Transaction: ${result.signature}`);
-      }
-
-      Alert.alert(
-        'USDC Requested',
-        `Requested devnet USDC for your wallet.\n\n${summaryParts.join('\n') || 'Tokens should arrive within a few seconds.'}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              setTimeout(() => {
-                void loadBalances();
-              }, 3000);
-            },
-          },
-        ]
-      );
+      await faucetService.requestUsdc(pubkey.toBase58());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+
       Alert.alert(
-        'USDC Request Failed',
-        `${message}\n\nYou can still open the SPL Token Faucet manually.`,
+        'Open Web Faucet',
+        message,
         [
           { text: 'Cancel', style: 'cancel' },
           {
-            text: 'Open faucet',
+            text: 'Open SPL Faucet',
             onPress: () => {
               Linking.openURL(faucetUrl).catch(openErr => {
                 Alert.alert('Error', `Failed to open faucet: ${openErr.message}`);
+              });
+            },
+          },
+          {
+            text: 'Open Circle Faucet',
+            onPress: () => {
+              Linking.openURL(circleFaucetUrl).catch(openErr => {
+                Alert.alert('Error', `Failed to open Circle faucet: ${openErr.message}`);
               });
             },
           },
