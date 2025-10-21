@@ -240,7 +240,7 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     gap: spacing.sm,
-    minWidth: 180,
+    minWidth: 200,
   },
   heroLabel: {
     color: 'rgba(226,232,240,0.72)',

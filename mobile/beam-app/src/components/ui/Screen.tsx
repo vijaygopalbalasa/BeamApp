@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, ScrollView, StyleSheet, StatusBar } from 'react-native';
-import { palette, spacing, layout } from '../../design/tokens';
+import { palette, spacing } from '../../design/tokens';
 
 interface ScreenProps {
   children: React.ReactNode;
@@ -45,13 +45,11 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
-    alignItems: 'center',
   },
   content: {
     width: '100%',
-    maxWidth: layout.maxContentWidth,
+    paddingHorizontal: spacing.lg,
     paddingTop: spacing.xl,
   },
   inner: {

@@ -150,6 +150,8 @@ export const Config = {
   // External Services
   services: {
     verifier: process.env.VERIFIER_URL || 'http://localhost:3000',
+    usdcFaucet:
+      process.env.USDC_FAUCET_URL || 'https://spl-token-faucet.com/api/airdrop',
   },
 
   // Feature Flags
