@@ -167,12 +167,37 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
 
     setRequestingUsdc(true);
     try {
-      await faucetService.requestUsdc(pubkey.toBase58());
+      const result = await faucetService.requestUsdc(pubkey.toBase58());
+
+      // Show success with options to use web faucet
+      Alert.alert(
+        'USDC Token Account Ready',
+        result.message || 'Your USDC token account has been created.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              // Reload balances after a delay to check for tokens
+              setTimeout(() => {
+                void loadBalances();
+              }, 3000);
+            },
+          },
+          {
+            text: 'Open Web Faucet',
+            onPress: () => {
+              Linking.openURL(faucetUrl).catch(openErr => {
+                Alert.alert('Error', `Failed to open faucet: ${openErr.message}`);
+              });
+            },
+          },
+        ]
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
       Alert.alert(
-        'Open Web Faucet',
+        'USDC Request',
         message,
         [
           { text: 'Cancel', style: 'cancel' },

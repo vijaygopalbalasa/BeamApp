@@ -20,6 +20,46 @@ class SolanaFaucetService {
   ];
 
   /**
+   * Retry airdrop request with exponential backoff
+   */
+  private async requestAirdropWithRetry(
+    connection: Connection,
+    publicKey: PublicKey,
+    amountLamports: number,
+    maxRetries: number = 3
+  ): Promise<string> {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const signature = await connection.requestAirdrop(publicKey, amountLamports);
+        return signature;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const isLastAttempt = attempt === maxRetries - 1;
+
+        // If it's a network error and not the last attempt, retry
+        if (!isLastAttempt && (
+          message.includes('network') ||
+          message.includes('fetch failed') ||
+          message.includes('timeout') ||
+          message.includes('ECONNREFUSED') ||
+          message.includes('ETIMEDOUT')
+        )) {
+          if (__DEV__) {
+            console.log(`Airdrop attempt ${attempt + 1} failed, retrying in ${1000 * Math.pow(2, attempt)}ms...`);
+          }
+          // Exponential backoff: 1s, 2s, 4s
+          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt)));
+          continue;
+        }
+
+        throw err;
+      }
+    }
+
+    throw new Error('Airdrop failed after maximum retries');
+  }
+
+  /**
    * Request SOL airdrop with fallback strategy
    * Tries multiple RPC endpoints if one fails due to rate limiting or internal errors
    */
@@ -29,10 +69,21 @@ class SolanaFaucetService {
   ): Promise<AirdropResult> {
     const amountLamports = amountSol * LAMPORTS_PER_SOL;
 
+    const connectionConfig = {
+      commitment: 'confirmed' as const,
+      confirmTransactionInitialTimeout: 90000, // 90 seconds
+      disableRetryOnRateLimit: false,
+      httpHeaders: { 'Content-Type': 'application/json' },
+    };
+
     // Try primary RPC first
     try {
-      const primaryConnection = new Connection(Config.solana.rpcUrl, 'confirmed');
-      const signature = await primaryConnection.requestAirdrop(publicKey, amountLamports);
+      const primaryConnection = new Connection(Config.solana.rpcUrl, connectionConfig);
+      const signature = await this.requestAirdropWithRetry(
+        primaryConnection,
+        publicKey,
+        amountLamports
+      );
 
       // Try to confirm but don't fail if confirmation times out
       try {
@@ -51,7 +102,7 @@ class SolanaFaucetService {
     } catch (primaryErr) {
       const primaryMessage = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
 
-      // If it's not a rate limit, internal error, or API key error, throw immediately
+      // If it's not a retryable error, throw immediately
       if (
         !primaryMessage.includes('Internal error') &&
         !primaryMessage.includes('internal error') &&
@@ -59,7 +110,12 @@ class SolanaFaucetService {
         !primaryMessage.includes('429') &&
         !primaryMessage.includes('API key') &&
         !primaryMessage.includes('api-key') &&
-        !primaryMessage.includes('Invalid API')
+        !primaryMessage.includes('Invalid API') &&
+        !primaryMessage.includes('network') &&
+        !primaryMessage.includes('fetch failed') &&
+        !primaryMessage.includes('timeout') &&
+        !primaryMessage.includes('ECONNREFUSED') &&
+        !primaryMessage.includes('ETIMEDOUT')
       ) {
         throw primaryErr;
       }
@@ -77,8 +133,12 @@ class SolanaFaucetService {
         }
 
         try {
-          const fallbackConnection = new Connection(rpcUrl, 'confirmed');
-          const signature = await fallbackConnection.requestAirdrop(publicKey, amountLamports);
+          const fallbackConnection = new Connection(rpcUrl, connectionConfig);
+          const signature = await this.requestAirdropWithRetry(
+            fallbackConnection,
+            publicKey,
+            amountLamports
+          );
 
           // Try to confirm but don't fail if confirmation times out
           try {
