@@ -22,7 +22,7 @@ export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
   };
 
   return (
-    <Screen scrollable={false}>
+    <Screen scrollable={true}>
       <View style={styles.container}>
         <View style={styles.header}>
           <View style={styles.logoContainer}>

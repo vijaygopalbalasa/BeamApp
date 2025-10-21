@@ -88,7 +88,7 @@ export function SetupScreen({ navigation }: SetupScreenProps) {
                   'Success',
                   `Escrow created!\n\nTransaction: ${tx}\n\nYou can now use Beam for offline payments.`
                 );
-                navigation.navigate('Main');
+                navigation.navigate('CustomerDashboard');
               } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 Alert.alert(
