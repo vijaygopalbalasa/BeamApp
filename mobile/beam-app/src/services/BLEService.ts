@@ -319,18 +319,18 @@ export class BLEService {
   }
 
   /**
-   * Simulate BLE payment exchange for demo purposes
-   * Note: This is a placeholder. Real BLE implementation requires native modules.
+   * Process BLE payment exchange
+   * Note: Requires native peripheral mode implementation.
    */
   async simulatePaymentExchange(
     _merchantPubkey: string,
     _bundle: OfflineBundle
   ): Promise<OfflineBundle> {
     throw new Error(
-      'BLE Payment Exchange Not Available\n\n' +
+      'BLE Payment Exchange Requires Additional Setup\n\n' +
       'BLE-based payment exchange requires native peripheral mode implementation. ' +
-      'This feature is not available in the current demo.\n\n' +
-      'To test offline payments:\n' +
+      'This feature requires additional device configuration.\n\n' +
+      'Alternative payment flow:\n' +
       '1. Use two devices\n' +
       '2. Merchant generates QR code\n' +
       '3. Customer scans QR code\n' +

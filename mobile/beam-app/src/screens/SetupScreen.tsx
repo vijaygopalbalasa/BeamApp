@@ -64,17 +64,29 @@ export function SetupScreen({ navigation }: SetupScreenProps) {
 
   const createEscrow = async () => {
     try {
+      // Validate input
+      const amount = parseFloat(initialAmount);
+      if (isNaN(amount) || amount <= 0) {
+        Alert.alert('Invalid Amount', 'Please enter a valid positive number for the USDC amount.');
+        return;
+      }
+
+      if (amount > 1000000) {
+        Alert.alert('Amount Too Large', 'Please enter a reasonable amount (less than 1,000,000 USDC).');
+        return;
+      }
+
       const signer = await wallet.getSigner('Create Beam escrow');
       if (!signer) {
         throw new Error('Wallet not loaded');
       }
 
       const client = new BeamProgramClient(Config.solana.rpcUrl, signer);
-      const amountLamports = parseFloat(initialAmount) * 1_000_000; // USDC has 6 decimals
+      const amountLamports = Math.floor(amount * 1_000_000); // USDC has 6 decimals
 
       Alert.alert(
         'Create Escrow',
-        `This will create an escrow account and transfer ${initialAmount} USDC to it.\n\nMake sure you have:\n- SOL for transaction fees\n- ${initialAmount} USDC in your wallet\n\nContinue?`,
+        `This will create an escrow account and transfer ${amount.toFixed(2)} USDC to it.\n\nMake sure you have:\n- SOL for transaction fees\n- ${amount.toFixed(2)} USDC in your wallet\n\nContinue?`,
         [
           { text: 'Cancel', style: 'cancel' },
           {

@@ -27,17 +27,29 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
 
   const createEscrow = async () => {
     try {
+      // Validate input
+      const amount = parseFloat(initialAmount);
+      if (isNaN(amount) || amount <= 0) {
+        Alert.alert('Invalid Amount', 'Please enter a valid positive number for the USDC amount.');
+        return;
+      }
+
+      if (amount > 1000000) {
+        Alert.alert('Amount Too Large', 'Please enter a reasonable amount (less than 1,000,000 USDC).');
+        return;
+      }
+
       const signer = await wallet.getSigner('Create Beam escrow');
       if (!signer) {
         throw new Error('Wallet not loaded');
       }
 
       const client = new BeamProgramClient(Config.solana.rpcUrl, signer);
-      const amountLamports = parseFloat(initialAmount) * 1_000_000;
+      const amountLamports = Math.floor(amount * 1_000_000);
 
       Alert.alert(
         'Create Escrow',
-        `Create escrow with ${initialAmount} USDC?\n\nThis will:\n• Create escrow account\n• Transfer ${initialAmount} USDC to escrow\n• Require SOL for fees\n\nContinue?`,
+        `Create escrow with ${amount.toFixed(2)} USDC?\n\nThis will:\n• Create escrow account\n• Transfer ${amount.toFixed(2)} USDC to escrow\n• Require SOL for fees\n\nContinue?`,
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -106,7 +118,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
             placeholderTextColor="rgba(226,232,240,0.4)"
           />
           <Small style={styles.helper}>
-            Recommended: Start with 100 USDC for testing
+            Recommended: Start with 100 USDC for initial funding
           </Small>
           <Button
             label={loading ? 'Creating...' : 'Create escrow'}

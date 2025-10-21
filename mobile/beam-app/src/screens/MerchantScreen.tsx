@@ -107,17 +107,29 @@ export function MerchantScreen() {
     }
 
     try {
+      // Validate amount input
+      const amountValue = parseFloat(amount);
+      if (isNaN(amountValue) || amountValue <= 0) {
+        Alert.alert('Invalid Amount', 'Please enter a valid positive number for the payment amount.');
+        return;
+      }
+
+      if (amountValue > 1000000) {
+        Alert.alert('Amount Too Large', 'Please enter a reasonable amount (less than 1,000,000 USDC).');
+        return;
+      }
+
       const qrPayload: BeamQRPaymentRequest = {
         type: 'pay',
         merchant: merchantPubkey.toBase58(),
-        amount: parseFloat(amount) * 1_000_000,
+        amount: Math.floor(amountValue * 1_000_000),
         currency: 'USD',
-        display_amount: amount,
+        display_amount: amountValue.toFixed(2),
         timestamp: Date.now(),
       };
 
       setQRData(JSON.stringify(qrPayload));
-      Alert.alert('✓ QR Code Generated', 'Show this QR code to your customer to receive payment.');
+      Alert.alert('QR Code Generated', 'Show this QR code to your customer to receive payment.');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       Alert.alert('Error', `Failed to generate QR:\n${message}`);
@@ -269,10 +281,10 @@ export function MerchantScreen() {
     }
   };
 
-  const simulatePaymentReceived = () => {
+  const demonstratePaymentReceived = () => {
     Alert.alert(
-      'Test Payment',
-      'Offline flow: customer scans, signs, and beams a bundle. Use two devices—one as merchant, one as customer—to try it end to end.'
+      'Payment Information',
+      'Offline payment flow: customer scans your QR code, authorizes payment, and transmits the bundle. Use two devices—one as merchant, one as customer—for the complete workflow.'
     );
   };
 
@@ -454,7 +466,7 @@ export function MerchantScreen() {
         ) : (
           <View style={styles.emptyState}>
             <HeadingM>No receipts yet</HeadingM>
-            <Body style={styles.helperText}>Generated payments appear here with attestation details.</Body>
+            <Body style={styles.helperText}>Received payments appear here with attestation details.</Body>
           </View>
         )}
       </Card>
@@ -487,7 +499,7 @@ export function MerchantScreen() {
             <QRCode value={qrData} size={220} backgroundColor="#fff" color="#000" />
             <Body style={styles.helperText}>Show this to the customer; bundles sync instantly.</Body>
             <View style={styles.qrActions}>
-              <Button label="Simulate" onPress={simulatePaymentReceived} variant="secondary" icon={<EmojiIcon symbol="🎓" />} />
+              <Button label="Info" onPress={demonstratePaymentReceived} variant="secondary" icon={<EmojiIcon symbol="🎓" />} />
               <Button label="Clear" onPress={() => setQRData(null)} variant="ghost" />
             </View>
           </Card>
