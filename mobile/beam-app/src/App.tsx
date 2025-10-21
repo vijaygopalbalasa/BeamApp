@@ -1,59 +1,23 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { SetupScreen } from './screens/SetupScreen';
+import { WelcomeScreen } from './screens/WelcomeScreen';
+import { WalletCreationScreen } from './screens/WalletCreationScreen';
+import { FundingScreen } from './screens/FundingScreen';
+import { EscrowSetupScreen } from './screens/EscrowSetupScreen';
 import { CustomerScreen } from './screens/CustomerScreen';
 import { MerchantScreen } from './screens/MerchantScreen';
-import { WalletScreen } from './screens/WalletScreen';
 
-const Tab = createBottomTabNavigator();
-const Stack = createStackNavigator();
+export type RootStackParamList = {
+  Welcome: undefined;
+  WalletCreation: { role: 'customer' | 'merchant' };
+  Funding: { role: 'customer' | 'merchant' };
+  EscrowSetup: { role: 'customer' };
+  CustomerDashboard: undefined;
+  MerchantDashboard: undefined;
+};
 
-function MainTabs() {
-  return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: '#6366f1',
-        tabBarInactiveTintColor: '#94a3b8',
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopWidth: 1,
-          borderTopColor: '#e2e8f0',
-          paddingTop: 8,
-          paddingBottom: 8,
-          height: 60,
-        },
-      }}
-    >
-      <Tab.Screen
-        name="Customer"
-        component={CustomerScreen}
-        options={{
-          tabBarLabel: 'Pay',
-          tabBarIcon: () => '💸',
-        }}
-      />
-      <Tab.Screen
-        name="Merchant"
-        component={MerchantScreen}
-        options={{
-          tabBarLabel: 'Receive',
-          tabBarIcon: () => '💰',
-        }}
-      />
-      <Tab.Screen
-        name="Wallet"
-        component={WalletScreen}
-        options={{
-          tabBarLabel: 'Wallet',
-          tabBarIcon: () => '👛',
-        }}
-      />
-    </Tab.Navigator>
-  );
-}
+const Stack = createStackNavigator<RootStackParamList>();
 
 export default function App() {
   return (
@@ -61,10 +25,15 @@ export default function App() {
       <Stack.Navigator
         screenOptions={{
           headerShown: false,
+          cardStyle: { backgroundColor: '#020617' },
         }}
       >
-        <Stack.Screen name="Setup" component={SetupScreen} />
-        <Stack.Screen name="Main" component={MainTabs} />
+        <Stack.Screen name="Welcome" component={WelcomeScreen} />
+        <Stack.Screen name="WalletCreation" component={WalletCreationScreen} />
+        <Stack.Screen name="Funding" component={FundingScreen} />
+        <Stack.Screen name="EscrowSetup" component={EscrowSetupScreen} />
+        <Stack.Screen name="CustomerDashboard" component={CustomerScreen} />
+        <Stack.Screen name="MerchantDashboard" component={MerchantScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

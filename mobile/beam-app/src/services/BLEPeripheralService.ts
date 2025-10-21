@@ -16,7 +16,6 @@
 
 import { NativeModules, NativeEventEmitter, Platform, EmitterSubscription } from 'react-native';
 import type { OfflineBundle } from '@beam/shared';
-import { Buffer } from 'buffer';
 
 const MODULE_NAME = 'BLEPeripheralModule';
 
