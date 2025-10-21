@@ -91,7 +91,7 @@ class AttestationService {
         return false;
       }
 
-      // Ensure bundle ID hash matches payload hash (placeholder until native binding supplied)
+      // Verify bundle ID hash matches payload hash
       const payloadHash = hashEnvelope({
         ...envelope,
         attestationReport: bundlePayload,

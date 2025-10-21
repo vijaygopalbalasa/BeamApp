@@ -201,7 +201,7 @@ export function WalletCreationScreen({ navigation, route }: WalletCreationScreen
         </Card>
       </Section>
 
-      <Section title="Security guarantee" description="No shortcuts, no mocks—production quality">
+      <Section title="Security guarantee" description="Enterprise-grade cryptographic security">
         <Card variant="highlight">
           <Body>
             ✓ Real Ed25519 cryptography (net.i2p.crypto:eddsa)

@@ -5,6 +5,7 @@ import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getAssociatedTokenAddress, getAccount } from '@solana/spl-token';
 import { wallet } from '../wallet/WalletManager';
 import { faucetService } from '../services/FaucetService';
+import { solanaFaucetService } from '../services/SolanaFaucetService';
 import { Config } from '../config';
 import { Screen } from '../components/ui/Screen';
 import { Hero } from '../components/ui/Hero';
@@ -95,12 +96,16 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
 
     setRequestingSol(true);
     try {
-      // Request airdrop from Solana devnet faucet
-      const signature = await connection.requestAirdrop(pubkey, 1 * LAMPORTS_PER_SOL);
+      // Use the faucet service which has fallback RPC endpoints
+      const result = await solanaFaucetService.requestSolAirdrop(pubkey, 0.5);
+
+      const sourceInfo = result.source === 'fallback-rpc'
+        ? '\n\n(Using alternate RPC endpoint)'
+        : '';
 
       Alert.alert(
         'Airdrop Requested',
-        `Requesting 1 SOL from devnet faucet...\n\nTransaction: ${signature}\n\nRefresh in a few seconds to see updated balance.`,
+        `Requesting ${result.amount} SOL from devnet faucet...${sourceInfo}\n\nTransaction: ${result.signature}\n\nRefresh in a few seconds to see updated balance.`,
         [
           {
             text: 'OK',
@@ -114,10 +119,36 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
         ]
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const error = err instanceof Error ? err : new Error(String(err));
+      const message = error.message;
+
+      // Provide helpful guidance based on error type
+      let errorTitle = 'Airdrop Failed';
+      let errorMessage = `Failed to request SOL airdrop:\n${message}`;
+
+      if (solanaFaucetService.isInternalError(error)) {
+        errorTitle = 'Faucet Temporarily Unavailable';
+        errorMessage = `The Solana devnet faucet is experiencing high traffic or internal errors.\n\nPlease try one of these alternatives:\n\n1. Use web faucet: faucet.solana.com\n2. Try QuickNode faucet\n3. Wait a few minutes and try again`;
+      } else if (solanaFaucetService.isRateLimitError(error)) {
+        errorTitle = 'Rate Limit Reached';
+        errorMessage = `You've reached the airdrop rate limit (2 SOL/hour, 24 SOL/day).\n\nPlease:\n1. Wait 1 hour and try again\n2. Use web faucet: faucet.solana.com\n3. Try a different network connection`;
+      }
+
       Alert.alert(
-        'Airdrop Failed',
-        `Failed to request SOL airdrop:\n${message}\n\nTry again in a few moments or use faucet.solana.com`
+        errorTitle,
+        errorMessage,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Open Web Faucet',
+            onPress: () => {
+              const faucetUrl = `https://faucet.solana.com/?address=${walletAddress}`;
+              Linking.openURL(faucetUrl).catch(openErr => {
+                Alert.alert('Error', `Failed to open faucet: ${openErr instanceof Error ? openErr.message : String(openErr)}`);
+              });
+            },
+          },
+        ]
       );
     } finally {
       setRequestingSol(false);
@@ -131,7 +162,7 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
       return;
     }
 
-    const faucetUrl = 'https://spl-token-faucet.com/?token-name=DUMMY';
+    const faucetUrl = `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}`;
     setRequestingUsdc(true);
     try {
       const result = await faucetService.requestUsdc(pubkey.toBase58());
@@ -295,9 +326,9 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
       >
         <Card style={styles.faucetCard}>
           <View style={styles.faucetContent}>
-            <HeadingM>💧 Request 1 SOL</HeadingM>
+            <HeadingM>💧 Request 0.5 SOL</HeadingM>
             <Body style={styles.faucetDescription}>
-              Free SOL for devnet testing. Required for all transactions including escrow creation and settlements.
+              Network tokens for transaction fees. Required for all operations including escrow creation and settlements. Requesting smaller amounts helps avoid rate limits.
             </Body>
             <Button
               label={requestingSol ? 'Requesting...' : 'Request SOL airdrop'}
@@ -311,12 +342,12 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
 
       {role === 'customer' && (
         <Section
-          title="Get test USDC"
-          description="Request USDC (DUMMY mint) directly from the devnet faucet"
+          title="Get USDC"
+          description="Request USDC tokens directly from the network faucet"
         >
           <Card style={styles.faucetCard}>
             <View style={styles.faucetContent}>
-              <HeadingM>💵 Request test USDC</HeadingM>
+              <HeadingM>💵 Request USDC</HeadingM>
               <Body style={styles.faucetDescription}>
                 Beam contacts the SPL Token Faucet API on your behalf. If the automated request fails, you can still open the faucet manually.
               </Body>

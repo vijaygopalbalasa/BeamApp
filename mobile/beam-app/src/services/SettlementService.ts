@@ -37,9 +37,22 @@ function unwrapBundle(input: SettlementInput): {
 export class SettlementService {
   private beamClient: BeamProgramClient | null = null;
   private connection: Connection;
+  private readonly networkTimeout = 30000; // 30 seconds timeout for network calls
 
   constructor() {
     this.connection = new Connection(Config.solana.rpcUrl, Config.solana.commitment);
+  }
+
+  /**
+   * Helper to add timeout to network calls
+   */
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number = this.networkTimeout): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`Network request timed out after ${timeoutMs}ms`)), timeoutMs)
+      ),
+    ]);
   }
 
   initializeClient(signer: BeamSigner): void {
@@ -123,7 +136,10 @@ export class SettlementService {
 
   async isOnline(): Promise<boolean> {
     try {
-      const { blockhash } = await this.connection.getLatestBlockhash('processed');
+      const { blockhash } = await this.withTimeout(
+        this.connection.getLatestBlockhash('processed'),
+        5000 // 5 second timeout for connectivity check
+      );
       return Boolean(blockhash);
     } catch (err) {
       if (__DEV__) {
@@ -236,23 +252,26 @@ export class SettlementService {
     }
 
     try {
-      const response = await fetch(`${endpoint}/verify-attestation`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          bundleId: bundle.tx_id,
-          bundleSummary: {
-            amount: bundle.token.amount,
-            nonce: bundle.nonce,
-            payer: bundle.payer_pubkey,
-            merchant: bundle.merchant_pubkey,
+      const response = await this.withTimeout(
+        fetch(`${endpoint}/verify-attestation`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-          payerAttestation: this.serializeForApi(payer),
-          merchantAttestation: merchant ? this.serializeForApi(merchant) : undefined,
+          body: JSON.stringify({
+            bundleId: bundle.tx_id,
+            bundleSummary: {
+              amount: bundle.token.amount,
+              nonce: bundle.nonce,
+              payer: bundle.payer_pubkey,
+              merchant: bundle.merchant_pubkey,
+            },
+            payerAttestation: this.serializeForApi(payer),
+            merchantAttestation: merchant ? this.serializeForApi(merchant) : undefined,
+          }),
         }),
-      });
+        20000 // 20 second timeout for verifier API calls
+      );
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));

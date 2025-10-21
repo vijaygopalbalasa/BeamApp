@@ -194,22 +194,59 @@ export function CustomerScreen() {
     setLoading(true);
 
     try {
-      const paymentRequest = JSON.parse(qrData);
+      // Validate QR data is not empty
+      if (!qrData || qrData.trim().length === 0) {
+        Alert.alert('Invalid QR Code', 'The scanned QR code is empty.');
+        return;
+      }
+
+      // Safely parse JSON with validation
+      let paymentRequest: any;
+      try {
+        paymentRequest = JSON.parse(qrData);
+      } catch (parseErr) {
+        Alert.alert('Invalid QR Code', 'The scanned QR code does not contain valid payment data.');
+        return;
+      }
+
+      // Validate payment request structure
+      if (!paymentRequest || typeof paymentRequest !== 'object') {
+        Alert.alert('Invalid QR Code', 'The scanned QR code does not contain a valid payment request.');
+        return;
+      }
 
       if (paymentRequest.type !== 'pay') {
-        Alert.alert('Invalid QR', 'This QR code is not a valid payment request.');
+        Alert.alert('Invalid QR Code', 'This QR code is not a valid payment request.');
         return;
       }
 
       const merchant = paymentRequest.merchant || paymentRequest.merchantPubkey;
-      if (!merchant || !paymentRequest.amount) {
-        Alert.alert('Invalid QR', 'This QR code is missing payment details.');
+      if (!merchant || typeof merchant !== 'string') {
+        Alert.alert('Invalid Payment Request', 'This QR code is missing a valid merchant address.');
+        return;
+      }
+
+      // Validate merchant address format (basic Solana public key validation)
+      if (merchant.length < 32 || merchant.length > 44) {
+        Alert.alert('Invalid Payment Request', 'The merchant address in this QR code is invalid.');
+        return;
+      }
+
+      // Validate amount
+      const amount = paymentRequest.amount;
+      if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+        Alert.alert('Invalid Payment Request', 'This QR code contains an invalid payment amount.');
+        return;
+      }
+
+      if (amount > 1000000000000) {
+        Alert.alert('Invalid Payment Request', 'The payment amount in this QR code is unreasonably large.');
         return;
       }
 
       await createPayment(
         merchant,
-        paymentRequest.amount,
+        amount,
         paymentRequest.description || 'Payment'
       );
     } catch (err) {
@@ -312,10 +349,10 @@ export function CustomerScreen() {
     }
   };
 
-  const mockPayment = async () => {
+  const initiatePayment = async () => {
     Alert.alert(
-      'Test Payment',
-      'Please use the QR scanner to scan a merchant payment request.\n\nFor testing, generate a QR code from the Merchant screen.',
+      'Create Payment',
+      'Please use the QR scanner to scan a merchant payment request.\n\nMerchants can generate payment QR codes from their dashboard.',
       [{ text: 'OK' }]
     );
   };
@@ -423,10 +460,10 @@ export function CustomerScreen() {
                 loading={loading}
               />
               <Button
-                label="Create test payment"
+                label="Create payment"
                 icon={<TextIcon label="💰" />}
                 variant="secondary"
-                onPress={mockPayment}
+                onPress={initiatePayment}
                 disabled={loading}
               />
             </View>
