@@ -1,4 +1,11 @@
 import { Config } from '../config';
+import { PublicKey, Connection, Transaction } from '@solana/web3.js';
+import {
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+} from '@solana/spl-token';
 
 interface FaucetResult {
   signature?: string;
@@ -6,60 +13,78 @@ interface FaucetResult {
   message?: string;
 }
 
+export class UsdcFaucetError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode?: number,
+    public readonly isRateLimit?: boolean,
+    public readonly shouldRetry?: boolean,
+  ) {
+    super(message);
+    this.name = 'UsdcFaucetError';
+  }
+}
+
 class FaucetService {
-  private readonly fallbackEndpoints = [
-    Config.services.usdcFaucet,
-    'https://token-faucet.solana.com/api/claim',
-    'https://spl-token-faucet.com/api/claim',
-  ];
+  private readonly REQUEST_TIMEOUT_MS = 30000;
 
   async requestUsdc(ownerAddress: string): Promise<FaucetResult> {
-    const payload = {
-      address: ownerAddress,
-      owner: ownerAddress,
-      wallet: ownerAddress,
-      mint: Config.tokens.usdc.mint,
-      tokenMint: Config.tokens.usdc.mint,
-      token: Config.tokens.usdc.symbol,
-    };
-
-    let lastError: Error | undefined;
-    for (const endpoint of this.uniqueEndpoints()) {
-      try {
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Faucet responded with ${response.status}`);
-        }
-
-        const text = await response.text();
-        const data = this.safeParse(text);
-        if (data && (data.success === true || data.status === 'ok' || data.signature || data.txid)) {
-          return {
-            signature: data.signature || data.txid || data.transaction,
-            amount: data.amount || data.uiAmount || data.quantity,
-            message: data.message || data.detail,
-          };
-        }
-
-        if (data && data.error) {
-          throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error));
-        }
-
-        throw new Error('Unexpected faucet response');
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        continue;
-      }
+    // Validate Solana address format
+    try {
+      new PublicKey(ownerAddress);
+    } catch {
+      throw new UsdcFaucetError('Invalid Solana address format');
     }
 
-    throw lastError ?? new Error('Unable to reach USDC faucet');
+    // Since the REST API endpoints don't exist (405 errors),
+    // we need to:
+    // 1. Create associated token account if it doesn't exist
+    // 2. Direct user to web faucet for manual funding
+
+    await this.ensureTokenAccount(ownerAddress);
+
+    throw new UsdcFaucetError(
+      'USDC faucet does not provide an automated API.\n\n' +
+      'Please use the web faucet:\n' +
+      `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}\n\n` +
+      'Or request from Circle (official USDC):\n' +
+      'https://faucet.circle.com/',
+      405,
+      false,
+      false,
+    );
+  }
+
+  private async ensureTokenAccount(ownerAddress: string): Promise<string> {
+    try {
+      const connection = new Connection(Config.solana.rpcUrl, 'confirmed');
+      const owner = new PublicKey(ownerAddress);
+      const mint = new PublicKey(Config.tokens.usdc.mint);
+
+      const tokenAccount = await getAssociatedTokenAddress(
+        mint,
+        owner,
+        false,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+
+      const accountInfo = await connection.getAccountInfo(tokenAccount);
+
+      if (!accountInfo) {
+        console.log(
+          `USDC token account doesn't exist for ${ownerAddress}. ` +
+          `Will be created automatically when receiving tokens.`,
+        );
+      }
+
+      return tokenAccount.toBase58();
+    } catch (err) {
+      console.error('Error checking USDC token account:', err);
+      throw new UsdcFaucetError(
+        'Failed to verify USDC token account. Please check your wallet address.',
+      );
+    }
   }
 
   private *uniqueEndpoints(): Iterable<string> {
