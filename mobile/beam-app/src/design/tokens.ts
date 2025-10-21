@@ -24,6 +24,7 @@ export const spacing = {
   md: 16,
   lg: 24,
   xl: 32,
+  xxl: 48,
 };
 
 export const radius = {
@@ -33,12 +34,12 @@ export const radius = {
 };
 
 export const typography = {
-  headingXL: 28,
-  headingL: 22,
-  headingM: 18,
-  body: 15,
-  small: 13,
-  micro: 11,
+  headingXL: 32,
+  headingL: 24,
+  headingM: 20,
+  body: 16,
+  small: 14,
+  micro: 12,
 };
 
 export const shadows = {

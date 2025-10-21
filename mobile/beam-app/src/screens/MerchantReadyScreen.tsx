@@ -46,7 +46,7 @@ export function MerchantReadyScreen({ navigation }: MerchantReadyScreenProps) {
 
   const handleContinue = async () => {
     await AsyncStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
-    navigation.navigate('Main');
+    navigation.navigate('MerchantDashboard');
   };
 
   return (

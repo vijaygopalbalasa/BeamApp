@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ScrollView, StyleSheet, StatusBar } from 'react-native';
+import { View, ScrollView, StyleSheet, StatusBar, KeyboardAvoidingView, Platform, SafeAreaView } from 'react-native';
 import { palette, spacing } from '../../design/tokens';
 
 interface ScreenProps {
@@ -20,21 +20,27 @@ export function Screen({ children, header, footer, scrollable = true, refreshCon
   );
 
   return (
-    <View style={styles.root}>
+    <SafeAreaView style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={palette.background} />
-      {scrollable ? (
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          bounces
-          refreshControl={refreshControl}
-        >
-          {content}
-        </ScrollView>
-      ) : (
-        content
-      )}
-    </View>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardView}
+      >
+        {scrollable ? (
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            bounces
+            refreshControl={refreshControl}
+            keyboardShouldPersistTaps="handled"
+          >
+            {content}
+          </ScrollView>
+        ) : (
+          content
+        )}
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -42,6 +48,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: palette.background,
+  },
+  keyboardView: {
+    flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
