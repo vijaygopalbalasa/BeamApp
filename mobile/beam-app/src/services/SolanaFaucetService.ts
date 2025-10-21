@@ -16,7 +16,7 @@ class SolanaFaucetService {
   private readonly fallbackRpcUrls = [
     'https://api.devnet.solana.com',
     'https://rpc.ankr.com/solana_devnet',
-    'https://devnet.helius-rpc.com/?api-key=public',
+    'https://solana-devnet-rpc.allthatnode.com',
   ];
 
   /**
@@ -51,12 +51,15 @@ class SolanaFaucetService {
     } catch (primaryErr) {
       const primaryMessage = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
 
-      // If it's not a rate limit or internal error, throw immediately
+      // If it's not a rate limit, internal error, or API key error, throw immediately
       if (
         !primaryMessage.includes('Internal error') &&
         !primaryMessage.includes('internal error') &&
         !primaryMessage.includes('rate limit') &&
-        !primaryMessage.includes('429')
+        !primaryMessage.includes('429') &&
+        !primaryMessage.includes('API key') &&
+        !primaryMessage.includes('api-key') &&
+        !primaryMessage.includes('Invalid API')
       ) {
         throw primaryErr;
       }
