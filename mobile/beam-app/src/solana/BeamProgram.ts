@@ -1,4 +1,51 @@
-import { Connection, PublicKey, Transaction, SystemProgram, Keypair } from '@solana/web3.js';
+/**
+ * BEAM PROGRAM CLIENT - COMPREHENSIVE DOCUMENTATION
+ *
+ * PROGRAM OVERVIEW:
+ * - Program ID: 6BjVpGR1pGJ41xDJF4mMuvC7vymFBZ8QXxoRKFqsuDDi
+ * - Network: Solana Devnet
+ * - Deployed Slot: 415476588
+ * - Purpose: Offline-first P2P payments with escrow and attestation verification
+ *
+ * ACCOUNT STRUCTURES:
+ *
+ * 1. OfflineEscrowAccount (PDA: seeds=[b"escrow", owner])
+ *    - owner: Pubkey (32 bytes)
+ *    - escrow_token_account: Pubkey (32 bytes)
+ *    - escrow_balance: u64 (8 bytes) - USDC balance in smallest units
+ *    - last_nonce: u64 (8 bytes) - Latest settled nonce
+ *    - reputation_score: u16 (2 bytes) - User reputation (0-65535)
+ *    - total_spent: u64 (8 bytes) - Lifetime spending
+ *    - created_at: i64 (8 bytes) - Unix timestamp
+ *    - bump: u8 (1 byte) - PDA bump seed
+ *
+ * 2. NonceRegistry (PDA: seeds=[b"nonce", payer])
+ *    - owner: Pubkey (32 bytes)
+ *    - last_nonce: u64 (8 bytes) - Latest nonce (replay protection)
+ *    - recent_bundle_hashes: Vec<[u8; 32]> (max 16) - Duplicate detection
+ *    - bundle_history: Vec<BundleRecord> (max 32) - Settlement history
+ *    - fraud_records: Vec<FraudRecord> (max 16) - Fraud evidence
+ *    - bump: u8 (1 byte) - PDA bump seed
+ *
+ * SECURITY MECHANISMS:
+ * ✓ Nonce Replay Protection: Enforces nonce > last_nonce
+ * ✓ Duplicate Detection: Tracks recent bundle hashes (16-entry ring buffer)
+ * ✓ Attestation Verification: Ed25519 signature from trusted verifier
+ * ✓ Timestamp Validation: Attestations valid for 24 hours
+ * ✓ Checked Arithmetic: Prevents overflow/underflow
+ * ✓ PDA Authority: Escrow controlled by program PDA
+ * ✓ Fraud Reporting: Track conflicting bundles
+ *
+ * INSTRUCTION FLOW:
+ * 1. InitializeEscrow: Create escrow + optional initial deposit
+ * 2. InitializeNonceRegistry: Create nonce tracking account
+ * 3. FundEscrow: Add USDC to escrow balance
+ * 4. SettleOfflinePayment: Verify attestation + transfer to merchant
+ * 5. ReportFraudulentBundle: Submit conflicting evidence
+ * 6. WithdrawEscrow: Withdraw unused funds
+ */
+
+import { Connection, PublicKey, Transaction, SystemProgram, TransactionInstruction, VersionedTransaction, Commitment } from '@solana/web3.js';
 import { Program, AnchorProvider, BN, Wallet, Idl } from '@coral-xyz/anchor';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { Buffer } from 'buffer';
@@ -34,40 +81,75 @@ export type FraudReasonKind = FraudReason;
 
 export class BeamProgramClient {
   private readonly connection: Connection;
-  private readonly program: Program;
-  private readonly provider: AnchorProvider;
-  private readonly signer: BeamSigner;
+  private readonly program: Program | null;
+  private readonly provider: AnchorProvider | null;
+  private readonly signer: BeamSigner | null;
 
-  constructor(rpcUrl: string = Config.solana.rpcUrl, signer: BeamSigner) {
-    this.connection = new Connection(rpcUrl, Config.solana.commitment);
-    this.signer = signer;
+  constructor(rpcUrlOrConnection: string | Connection = Config.solana.rpcUrl, signer?: BeamSigner) {
+    // Accept either an RPC URL string or an existing Connection instance
+    if (typeof rpcUrlOrConnection === 'string') {
+      // Create a React Native–safe Connection with explicit fetch + headers
+      this.connection = new Connection(rpcUrlOrConnection, {
+        commitment: Config.solana.commitment as Commitment,
+        confirmTransactionInitialTimeout: Config.solana.confirmationTimeout ?? 30000,
+        disableRetryOnRateLimit: false,
+        httpHeaders: { 'Content-Type': 'application/json' },
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), Config.solana.confirmationTimeout ?? 30000);
+          return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeoutId));
+        },
+      });
+    } else {
+      this.connection = rpcUrlOrConnection;
+    }
+    this.signer = signer ?? null;
 
-    const anchorWallet: Wallet = {
-      publicKey: signer.publicKey,
-      signTransaction: async (tx: Transaction) => {
-        const message = tx.serializeMessage();
-        const signature = await signer.sign(message, 'Authorize Solana transaction');
-        tx.addSignature(signer.publicKey, Buffer.from(signature));
-        return tx;
-      },
-      signAllTransactions: async (txs: Transaction[]) => {
-        for (const tx of txs) {
-          const message = tx.serializeMessage();
-          const signature = await signer.sign(message, 'Authorize Solana transaction');
-          tx.addSignature(signer.publicKey, Buffer.from(signature));
-        }
-        return txs;
-      },
-    };
+    if (signer) {
+      // Full mode with signer for write operations. Avoid in RN for read-only.
+      const anchorWallet: any = {
+        publicKey: signer.publicKey,
+        signTransaction: async <T extends Transaction | VersionedTransaction>(tx: T): Promise<T> => {
+          const anyTx: any = tx as any;
+          if (typeof anyTx.serializeMessage === 'function') {
+            const message = anyTx.serializeMessage();
+            const signature = await signer.sign(message, 'Authorize Solana transaction');
+            if (typeof anyTx.addSignature === 'function') {
+              anyTx.addSignature(signer.publicKey, Buffer.from(signature));
+            }
+          }
+          return tx as T;
+        },
+        signAllTransactions: async <T extends Transaction | VersionedTransaction>(txs: T[]): Promise<T[]> => {
+          for (const t of txs as any[]) {
+            if (typeof t.serializeMessage === 'function') {
+              const message = t.serializeMessage();
+              const signature = await signer.sign(message, 'Authorize Solana transaction');
+              if (typeof t.addSignature === 'function') {
+                t.addSignature(signer.publicKey, Buffer.from(signature));
+              }
+            }
+          }
+          return txs as T[];
+        },
+      };
 
-    this.provider = new AnchorProvider(this.connection, anchorWallet, {
-      commitment: Config.solana.commitment,
-    });
-
-    this.program = new Program(BeamIDL as Idl, this.provider);
+      this.provider = new (AnchorProvider as any)(this.connection, anchorWallet, {
+        commitment: Config.solana.commitment,
+      }) as any;
+      this.program = new (Program as any)(BeamIDL as Idl, PROGRAM_ID, this.provider as any) as any;
+    } else {
+      // Read-only mode: avoid constructing Anchor Provider/Program to prevent RN runtime issues
+      this.provider = null;
+      this.program = null;
+    }
   }
 
   async ensureNonceRegistry(): Promise<void> {
+    if (!this.signer || !this.program) {
+      throw new Error('Signer required for write operations');
+    }
+
     const [nonceRegistry] = this.findNonceRegistry(this.signer.publicKey);
     const account = await this.connection.getAccountInfo(nonceRegistry);
     if (account) {
@@ -96,31 +178,125 @@ export class BeamProgramClient {
   async getEscrowAccount(owner: PublicKey): Promise<EscrowAccount | null> {
     const [escrowPDA] = this.findEscrowPDA(owner);
     try {
-      const account = await this.program.account.offlineEscrowAccount.fetch(escrowPDA);
+      // Read-only operation - use connection directly without program/signer
+      const accountInfo = await this.connection.getAccountInfo(escrowPDA);
+      if (!accountInfo) {
+        console.log('[BeamProgram] Escrow account does not exist yet');
+        return null;
+      }
+
+      console.log('[BeamProgram] Escrow account found, deserializing...');
+
+      // Manual deserialization (robust, avoids Anchor IDL issues)
+      const data = accountInfo.data;
+      if (data.length < 8) {
+        console.error('[BeamProgram] Account data too short');
+        return null;
+      }
+
+      let offset = 8; // Skip 8-byte discriminator
+
+      // owner: Pubkey (32 bytes)
+      const ownerPubkey = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+
+      // escrow_token_account: Pubkey (32 bytes)
+      const escrowTokenAccount = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+
+      // escrow_balance: u64 (8 bytes)
+      const escrowBalance = Number(data.readBigUInt64LE(offset));
+      offset += 8;
+
+      // last_nonce: u64 (8 bytes)
+      const lastNonce = Number(data.readBigUInt64LE(offset));
+      offset += 8;
+
+      // reputation_score: u16 (2 bytes)
+      const reputationScore = data.readUInt16LE(offset);
+      offset += 2;
+
+      // total_spent: u64 (8 bytes)
+      const totalSpent = Number(data.readBigUInt64LE(offset));
+      offset += 8;
+
+      // created_at: i64 (8 bytes)
+      const createdAt = Number(data.readBigInt64LE(offset));
+      offset += 8;
+
+      // bump: u8 (1 byte)
+      const bump = data.readUInt8(offset);
+
+      console.log('[BeamProgram] ✅ Escrow deserialized successfully:', {
+        owner: ownerPubkey.toBase58(),
+        escrowBalance,
+        lastNonce,
+      });
+
       return {
         address: escrowPDA,
-        owner: account.owner,
-        escrowTokenAccount: account.escrowTokenAccount,
-        escrowBalance: account.escrowBalance.toNumber(),
-        lastNonce: account.lastNonce.toNumber(),
-        reputationScore: account.reputationScore,
-        totalSpent: account.totalSpent.toNumber(),
-        createdAt: account.createdAt.toNumber(),
-        bump: account.bump,
+        owner: ownerPubkey,
+        escrowTokenAccount,
+        escrowBalance,
+        lastNonce,
+        reputationScore,
+        totalSpent,
+        createdAt,
+        bump,
       };
     } catch (err) {
-      console.error('Error fetching escrow account:', err);
+      console.error('[BeamProgram] ❌ Error fetching escrow account:', err);
       return null;
     }
   }
 
+  /**
+   * Get escrow balance (convenience method)
+   * Returns 0 if escrow doesn't exist yet
+   */
+  async getEscrowBalance(owner: PublicKey): Promise<number> {
+    const escrow = await this.getEscrowAccount(owner);
+    return escrow?.escrowBalance || 0;
+  }
+
   async initializeEscrow(initialAmount: number): Promise<string> {
+    if (!this.signer || !this.program) {
+      throw new Error('Signer required for write operations');
+    }
+
     try {
+      await this.ensureNonceRegistry();
+
       const ownerPubkey = this.signer.publicKey;
       const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
 
+      const preInstructions: TransactionInstruction[] = [];
+
       const ownerTokenAccount = await getAssociatedTokenAddress(USDC_MINT, ownerPubkey);
-      const escrowTokenAccount = Keypair.generate();
+      const ownerTokenInfo = await this.connection.getAccountInfo(ownerTokenAccount);
+      if (!ownerTokenInfo) {
+        preInstructions.push(
+          createAssociatedTokenAccountInstruction(
+            ownerPubkey,
+            ownerTokenAccount,
+            ownerPubkey,
+            USDC_MINT
+          )
+        );
+      }
+
+      const escrowTokenAccount = await getAssociatedTokenAddress(USDC_MINT, escrowPDA, true);
+      const escrowTokenInfo = await this.connection.getAccountInfo(escrowTokenAccount);
+      if (!escrowTokenInfo) {
+        preInstructions.push(
+          createAssociatedTokenAccountInstruction(
+            ownerPubkey,
+            escrowTokenAccount,
+            escrowPDA,
+            USDC_MINT
+          )
+        );
+      }
 
       const tx = await this.program.methods
         .initializeEscrow(new BN(initialAmount))
@@ -128,11 +304,11 @@ export class BeamProgramClient {
           escrowAccount: escrowPDA,
           owner: ownerPubkey,
           ownerTokenAccount,
-          escrowTokenAccount: escrowTokenAccount.publicKey,
+          escrowTokenAccount,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
-        .signers([escrowTokenAccount])
+        .preInstructions(preInstructions)
         .rpc();
 
       return tx;
@@ -142,6 +318,47 @@ export class BeamProgramClient {
     }
   }
 
+  /**
+   * CRITICAL: Settle Offline Payment
+   *
+   * PROGRAM VALIDATION (lib.rs lines 80-207):
+   * 1. Bundle ID: 1-128 characters, non-empty
+   * 2. Attestation timestamp: within 24 hours (MAX_ATTESTATION_AGE)
+   * 3. Attestation root: must match computed value
+   * 4. Verifier signature: Ed25519 verification against VERIFIER_PUBKEY_BYTES
+   * 5. Bundle hash: not in recent_bundle_hashes (duplicate detection)
+   * 6. Nonce: must be > nonce_registry.last_nonce AND > escrow_account.last_nonce
+   * 7. Balance: escrow_balance >= amount
+   * 8. Transfer: CPI to SPL Token program
+   * 9. State update: escrow_balance (checked_sub), total_spent (checked_add), last_nonce
+   * 10. History: Add to bundle_history (max 32), recent_bundle_hashes (max 16)
+   *
+   * PDA SEEDS:
+   * - escrow_account: [b"escrow", payer.key()]
+   * - nonce_registry: [b"nonce", payer.key()]
+   *
+   * CONSTRAINTS CHECKED:
+   * - escrow_account.owner == owner (has_one relation)
+   * - nonce_registry.owner == payer (verified in code)
+   * - nonce_registry.owner == escrow_account.owner (has_one relation)
+   * - escrow_token_account.owner == escrow_account PDA
+   *
+   * EVENTS EMITTED:
+   * - PaymentSettled { payer, merchant, amount, nonce, bundle_id }
+   * - BundleHistoryRecorded { payer, merchant, bundle_hash, amount, nonce, settled_at }
+   *
+   * ERROR CODES:
+   * - 6000: InvalidAmount
+   * - 6001: InsufficientFunds
+   * - 6002: InvalidNonce
+   * - 6004: InvalidOwner
+   * - 6005: MissingAttestation
+   * - 6006: InvalidAttestation
+   * - 6007: InvalidBundleId
+   * - 6008: DuplicateBundle
+   * - 6013: Overflow
+   * - 6014: Underflow
+   */
   async settleOfflinePayment(
     merchantPubkey: PublicKey,
     amount: number,
@@ -149,6 +366,10 @@ export class BeamProgramClient {
     bundleId: string,
     evidence: SettlementEvidenceArgs
   ): Promise<string> {
+    if (!this.signer || !this.program) {
+      throw new Error('Signer required for write operations');
+    }
+
     try {
       const payerPubkey = this.signer.publicKey;
       const [escrowPDA] = this.findEscrowPDA(payerPubkey);
@@ -159,6 +380,7 @@ export class BeamProgramClient {
       const preInstructions = [];
       const merchantAccountInfo = await this.connection.getAccountInfo(merchantTokenAccount);
       if (!merchantAccountInfo) {
+        // Create merchant's ATA if it doesn't exist (payer pays rent)
         preInstructions.push(
           createAssociatedTokenAccountInstruction(
             payerPubkey,
@@ -194,6 +416,10 @@ export class BeamProgramClient {
   }
 
   async fundEscrow(amount: number): Promise<string> {
+    if (!this.signer || !this.program) {
+      throw new Error('Signer required for write operations');
+    }
+
     try {
       const ownerPubkey = this.signer.publicKey;
       const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
@@ -220,6 +446,10 @@ export class BeamProgramClient {
   }
 
   async withdrawEscrow(amount: number): Promise<string> {
+    if (!this.signer || !this.program) {
+      throw new Error('Signer required for write operations');
+    }
+
     try {
       const ownerPubkey = this.signer.publicKey;
       const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
@@ -247,8 +477,18 @@ export class BeamProgramClient {
 
   private async getEscrowTokenAccount(escrowPDA: PublicKey): Promise<PublicKey> {
     try {
-      const escrowAccount = await this.program.account.offlineEscrowAccount.fetch(escrowPDA);
-      return escrowAccount.escrowTokenAccount;
+      // Prefer manual deserialization to avoid Anchor in RN
+      const info = await this.connection.getAccountInfo(escrowPDA);
+      if (!info) {
+        throw new Error('Escrow account does not exist');
+      }
+      const data = info.data;
+      if (data.length < 8 + 32 + 32) {
+        throw new Error('Escrow account data too short');
+      }
+      // Skip discriminator and owner
+      let offset = 8 + 32;
+      return new PublicKey(data.slice(offset, offset + 32));
     } catch (err) {
       console.error('Error fetching escrow token account:', err);
       throw new Error(`Failed to get escrow token account: ${err instanceof Error ? err.message : String(err)}`);
@@ -292,7 +532,7 @@ export class BeamProgramClient {
     return this.connection;
   }
 
-  getProgram(): Program {
+  getProgram(): Program | null {
     return this.program;
   }
 
@@ -307,7 +547,21 @@ export class BeamProgramClient {
   async getNonceRegistry(owner: PublicKey): Promise<NonceRegistryAccount | null> {
     try {
       const [noncePda] = this.findNonceRegistry(owner);
-      const account = await this.program.account.nonceRegistry.fetch(noncePda);
+
+      // Check if account exists first
+      const accountInfo = await this.connection.getAccountInfo(noncePda);
+      if (!accountInfo) {
+        return null;
+      }
+
+      // Use program if available, otherwise create temp program
+      let programToUse = this.program;
+      if (!programToUse) {
+        const Program = require('@coral-xyz/anchor').Program;
+        programToUse = new Program(BeamIDL as Idl, { connection: this.connection } as any, PROGRAM_ID);
+      }
+
+      const account = await (programToUse as any).account.nonceRegistry.fetch(noncePda);
       return {
         owner: account.owner,
         lastNonce: account.lastNonce.toNumber(),
@@ -338,6 +592,10 @@ export class BeamProgramClient {
     conflictingHash: Uint8Array,
     reason: FraudReasonKind
   ): Promise<string> {
+    if (!this.signer || !this.program) {
+      throw new Error('Signer required for write operations');
+    }
+
     const [nonceRegistry] = this.findNonceRegistry(payer);
     const reasonArg = this.formatFraudReason(reason);
     try {

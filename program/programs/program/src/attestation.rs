@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::hash::hashv;
 use ed25519_dalek::{PublicKey, Signature, Verifier};
+use sha2::{Digest, Sha256};
 
 const ATTESTATION_PREFIX: &[u8] = b"beam.attestation.v1";
 // Test verifier public key - in production, this would be the key of a trusted TEE verifier service
@@ -102,17 +102,20 @@ pub fn compute_attestation_root(
         AttestationRole::Merchant => [1u8],
     };
 
-    let hash = hashv(&[
-        ATTESTATION_PREFIX,
-        bundle_id.as_bytes(),
-        payer.as_ref(),
-        merchant.as_ref(),
-        &amount_bytes,
-        &nonce_bytes,
-        &role_byte,
-        attestation_nonce,
-        &timestamp_bytes,
-    ]);
+    // Use SHA256 for attestation root computation (matches verifier and tests)
+    let mut hasher = Sha256::new();
+    hasher.update(ATTESTATION_PREFIX);
+    hasher.update(bundle_id.as_bytes());
+    hasher.update(payer.as_ref());
+    hasher.update(merchant.as_ref());
+    hasher.update(&amount_bytes);
+    hasher.update(&nonce_bytes);
+    hasher.update(&role_byte);
+    hasher.update(attestation_nonce);
+    hasher.update(&timestamp_bytes);
 
-    hash.to_bytes()
+    let hash_result = hasher.finalize();
+    let mut hash_bytes = [0u8; 32];
+    hash_bytes.copy_from_slice(&hash_result);
+    hash_bytes
 }
