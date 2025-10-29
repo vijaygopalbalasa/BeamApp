@@ -6,7 +6,7 @@ interface CardProps {
   children: React.ReactNode;
   style?: ViewStyle;
   padding?: 'none' | 'sm' | 'md' | 'lg';
-  variant?: 'default' | 'highlight' | 'glass';
+  variant?: 'default' | 'highlight' | 'glass' | 'subtle';
 }
 
 export function Card({ children, style, padding = 'md', variant = 'default' }: CardProps) {
@@ -33,6 +33,10 @@ const styles = StyleSheet.create({
   },
   glass: {
     backgroundColor: 'rgba(15,23,42,0.65)',
+    borderColor: 'rgba(148,163,184,0.1)',
+  },
+  subtle: {
+    backgroundColor: 'rgba(30,41,59,0.6)',
     borderColor: 'rgba(148,163,184,0.1)',
   },
 });

@@ -40,7 +40,7 @@ app.get('/', (_req, res) => {
 // Health check (minimal imports)
 app.get('/health', (_req, res) => {
   try {
-    const VERIFIER_ALLOW_DEV = process.env.DEV_MODE === 'true' || process.env.VERIFIER_ALLOW_DEV === 'true';
+    const VERIFIER_ALLOW_DEV = true; // TEMP: Force dev mode until Play Integrity is configured
     res.setHeader('Content-Type', 'application/json');
     res.status(200).json({ status: 'ok', devMode: VERIFIER_ALLOW_DEV });
   } catch (e) {
@@ -147,13 +147,14 @@ app.post('/test-usdc/mint', async (req, res) => {
 });
 
 // Attestation API Routes (lazy import - only load when route is accessed)
-app.use('/api/attestation', (req, res, next) => {
-  import('./routes/attestation.js')
-    .then(module => module.default(req, res, next))
-    .catch(err => {
-      console.error('[verifier] attestation router error', err);
-      res.status(500).json({ error: 'attestation_error', details: err.message });
-    });
+app.use('/api/attestation', async (req, res, next) => {
+  try {
+    const { default: router } = await import('./routes/attestation.js');
+    router(req, res, next);
+  } catch (err: any) {
+    console.error('[verifier] attestation router error', err);
+    res.status(500).json({ error: 'attestation_error', details: err.message });
+  }
 });
 
 // Bundle Relay Endpoints (lazy imports with rate limiting)

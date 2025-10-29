@@ -20,6 +20,7 @@ interface ConnectionConfig {
 }
 
 class ConnectionService {
+  private currentRpcUrl: string = Config.solana.rpcUrl;
   private readonly fallbackRpcUrls = [
     'https://api.devnet.solana.com',
     'https://rpc.ankr.com/solana_devnet',
@@ -193,7 +194,7 @@ class ConnectionService {
    * Get a connection with fallback support (for use in other services)
    */
   getConnection(config?: ConnectionConfig): Connection {
-    return this.createConnection(Config.solana.rpcUrl, config);
+    return this.createConnection(this.currentRpcUrl, config);
   }
 
   /**
@@ -230,6 +231,21 @@ class ConnectionService {
     }
 
     throw new Error('Unexpected error: all endpoints failed without throwing');
+  }
+
+  /**
+   * Override default RPC URL for subsequent getConnection() calls.
+   * Pass null to reset to Config default.
+   */
+  setRpcOverride(url: string | null): void {
+    this.currentRpcUrl = url || Config.solana.rpcUrl;
+    if (__DEV__) {
+      console.log('[ConnectionService] RPC override set to', this.currentRpcUrl);
+    }
+  }
+
+  getCurrentRpcUrl(): string {
+    return this.currentRpcUrl;
   }
 }
 

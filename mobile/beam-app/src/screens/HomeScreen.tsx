@@ -10,6 +10,17 @@ import { wallet } from '../wallet/WalletManager';
 import { PublicKey } from '@solana/web3.js';
 import { connectionService } from '../services/ConnectionService';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getUseServerSettlement } from '../utils/flags';
+import { Config } from '../config';
+import { BeamProgramClient } from '../solana/BeamProgram';
+import { BalanceCard } from '../components/features/BalanceCard';
+import { NetworkStatus } from '../components/features/NetworkStatus';
+import { transactionHistory, type TransactionItem } from '../services/TransactionHistoryService';
+import { Skeleton } from '../components/ui/Skeleton';
+import { InfoButton } from '../components/ui/InfoButton';
+import { haptics } from '../utils/haptics';
+import { TransactionCard } from '../components/features/TransactionCard';
 
 interface HomeScreenProps {
   navigation: {
@@ -24,6 +35,12 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   const [escrowBalance, setEscrowBalance] = useState<number>(0);
   const [escrowExists, setEscrowExists] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
+  const [health, setHealth] = useState<{ rpc: boolean; program: boolean }>({ rpc: false, program: false });
+  const [backedUp, setBackedUp] = useState<boolean>(false);
+  const [healthUpdatedAt, setHealthUpdatedAt] = useState<number>(0);
+  const [balancesUpdatedAt, setBalancesUpdatedAt] = useState<number>(0);
+  const [recent, setRecent] = useState<TransactionItem[]>([]);
+  const [recentLoading, setRecentLoading] = useState<boolean>(true);
 
   const ensureWallet = useCallback(async (): Promise<string | null> => {
     console.log('[HomeScreen] ensureWallet called');
@@ -83,6 +100,20 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       const pubkey = new PublicKey(address);
       console.log('[HomeScreen] PublicKey created successfully');
 
+      // Health check: quick RPC and program status + backup flag
+      try {
+        const conn = connectionService.getConnection();
+        await conn.getSlot('processed');
+        const client = new BeamProgramClient(conn);
+        const status = await client.testConnection();
+        setHealth({ rpc: status.connected, program: status.programExists });
+        setHealthUpdatedAt(Date.now());
+        const bu = await AsyncStorage.getItem('@beam:wallet_backed_up');
+        setBackedUp(bu === 'true');
+      } catch {
+        setHealth({ rpc: false, program: false });
+      }
+
       // Get both balances using reliable connection service with fallbacks
       console.log('[HomeScreen] Calling connectionService.getAllBalances...');
       const balances = await connectionService.getAllBalances(pubkey);
@@ -92,6 +123,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       setSolBalance(balances.solBalance);
       console.log('[HomeScreen] Setting USDC balance to:', balances.usdcBalance);
       setUsdcBalance(balances.usdcBalance);
+      setBalancesUpdatedAt(Date.now());
 
       // Try to get escrow balance
       try {
@@ -147,6 +179,17 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         USDC: balances.usdcBalance,
         Escrow: escrowBalance,
       });
+
+      // Load recent activity
+      try {
+        setRecentLoading(true);
+        const items = await transactionHistory.loadRecent(5);
+        setRecent(items);
+      } catch (e) {
+        console.log('[HomeScreen] Recent activity load failed', e);
+      } finally {
+        setRecentLoading(false);
+      }
     } catch (error) {
       console.error('[HomeScreen] ❌ Failed to load balances:', error);
       console.error('[HomeScreen] Error details:', {
@@ -205,47 +248,56 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
             : 'Loading wallet keys...'}
         />
 
-        {/* Wallet Balance Card */}
-        <Card variant="glass" style={styles.balanceCard}>
-          <Small style={styles.balanceLabel}>Available Balance</Small>
-          {loading ? (
-            <ActivityIndicator color={palette.primary} size="small" style={styles.loader} />
-          ) : (
-            <View>
-              <View style={styles.balanceRow}>
-                <View style={styles.balanceItem}>
-                  <HeadingM style={styles.balanceAmount}>
-                    {solBalance !== null ? solBalance.toFixed(4) : '0.0000'} SOL
-                  </HeadingM>
-                </View>
-                <View style={styles.balanceDivider} />
-                <View style={styles.balanceItem}>
-                  <HeadingM style={styles.balanceAmount}>
-                    {usdcBalance !== null ? usdcBalance.toFixed(2) : '0.00'} USDC
-                  </HeadingM>
-                </View>
-              </View>
+        <BalanceCard
+          sol={solBalance}
+          usdc={usdcBalance}
+          escrow={escrowBalance}
+          loading={loading}
+          updatedAt={balancesUpdatedAt}
+          refreshButton={
+            <Button label="Refresh balances" variant="secondary" onPress={() => { haptics.light(); loadBalances(); }} style={styles.refreshButton} />
+          }
+        />
 
-              {/* Escrow Balance Section */}
-              <View style={styles.escrowSection}>
-                <View style={styles.escrowHeader}>
-                  <Small style={styles.escrowLabel}>Escrow Balance</Small>
-                  {!escrowExists && (
-                    <Small style={styles.escrowHint}>(Not initialized)</Small>
-                  )}
-                </View>
-                <Body style={styles.escrowBalance}>
-                  🔒 {escrowBalance.toFixed(2)} USDC
-                </Body>
+        {/* Health Card */}
+        <Card variant="glass" style={styles.infoCard}>
+          <NetworkStatus online={health.rpc} program={health.program} updatedAt={healthUpdatedAt} />
+        </Card>
+
+        {/* Quick Actions */}
+        <Card style={styles.quickActions}>
+          <Button label="Pay" onPress={handlePayMerchant} style={styles.quickBtn} />
+          <Button label="Receive" variant="secondary" onPress={handleReceivePayment} style={styles.quickBtn} />
+          <Button label={escrowExists ? 'Escrow' : 'Init Escrow'} variant="secondary" onPress={() => navigation.navigate('EscrowSetup')} style={styles.quickBtn} />
+        </Card>
+
+        {/* Recent Activity */}
+        <Card style={styles.actionCard}>
+          <View style={[styles.cardHeader, { alignItems: 'center' }]}>
+            <HeadingM>Recent Activity</HeadingM>
+            <InfoButton title="What is this?" message="Your latest payments appear here. Tap any item for details." />
+            {recent.length > 0 && (
+              <Button label="View All" variant="secondary" onPress={() => navigation.navigate('Transactions')} />
+            )}
+          </View>
+          <View>
+            {recentLoading ? (
+              <View>
+                {[0,1,2].map(i => (
+                  <View key={i} style={{ paddingVertical: 12 }}>
+                    <Skeleton height={20} width={'60%'} />
+                    <Skeleton height={14} width={'40%'} style={{ marginTop: 6 }} />
+                  </View>
+                ))}
               </View>
-            </View>
-          )}
-          <Button
-            label="Refresh balances"
-            variant="secondary"
-            onPress={loadBalances}
-            style={styles.refreshButton}
-          />
+            ) : recent.length === 0 ? (
+              <Small style={{ color: 'rgba(148,163,184,0.8)' }}>No recent activity</Small>
+            ) : (
+              recent.map(item => (
+                <TransactionCard key={item.id} item={item} onPress={(id) => navigation.navigate('TransactionDetails', { id })} />
+              ))
+            )}
+          </View>
         </Card>
 
         <View style={styles.content}>
@@ -291,7 +343,15 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
           <Small style={styles.infoText}>
             You can switch between customer and merchant modes anytime. Your wallet address remains the same for both roles.
           </Small>
+          <Button
+            label="Open Settings"
+            variant="secondary"
+            onPress={() => navigation.navigate('Settings')}
+            style={{ marginTop: spacing.sm }}
+          />
         </Card>
+
+        {/* Removed checklist for simplified Home UI */}
       </View>
     </Screen>
   );
@@ -335,6 +395,11 @@ const styles = StyleSheet.create({
   },
   refreshButton: {
     marginTop: spacing.xs,
+  },
+  updatedAt: {
+    marginTop: spacing.xs,
+    color: 'rgba(148,163,184,0.7)',
+    textAlign: 'center',
   },
   escrowSection: {
     marginTop: spacing.md,
@@ -392,5 +457,29 @@ const styles = StyleSheet.create({
     color: 'rgba(148,163,184,0.8)',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  checklistCard: {
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  checklist: {
+    gap: spacing.xs,
+  },
+  checkItem: {
+    color: palette.textPrimary,
+  },
+  checklistActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  quickActions: {
+    padding: spacing.md,
+    flexDirection: 'row',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  quickBtn: {
+    flex: 1,
   },
 });

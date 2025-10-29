@@ -18,6 +18,9 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -86,6 +89,28 @@ class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
         return cipher.doFinal(encrypted)
     }
 
+    private fun pbkdf2Key(passphrase: String, salt: ByteArray, iterations: Int = 200000): SecretKeySpec {
+        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = PBEKeySpec(passphrase.toCharArray(), salt, iterations, 256)
+        val keyBytes = factory.generateSecret(spec).encoded
+        return SecretKeySpec(keyBytes, "AES")
+    }
+
+    private fun encryptWithKey(key: SecretKeySpec, data: ByteArray): Pair<ByteArray, ByteArray> {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
+        val ct = cipher.doFinal(data)
+        return Pair(ct, iv)
+    }
+
+    private fun decryptWithKey(key: SecretKeySpec, iv: ByteArray, ct: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val spec = GCMParameterSpec(128, iv)
+        cipher.init(Cipher.DECRYPT_MODE, key, spec)
+        return cipher.doFinal(ct)
+    }
+
     @ReactMethod
     fun ensureWalletKeypair(promise: Promise) {
         try {
@@ -122,9 +147,9 @@ class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
             val privateKeySpec = EdDSAPrivateKeySpec(seed, edParams)
             val privateKey = EdDSAPrivateKey(privateKeySpec)
 
-            // Derive public key from private key
-            // Ed25519 public key is just the A point encoded
-            val publicKeyBytes = privateKey.a.toByteArray()
+            // Derive public key from private key (32-byte encoded A point)
+            // Use the encoded abyte to avoid variable-length BigInteger encoding
+            val publicKeyBytes = privateKey.abyte
 
             // Verify we have 32 bytes
             if (publicKeyBytes.size != 32) {
@@ -167,12 +192,11 @@ class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
             val privateKeySpec = EdDSAPrivateKeySpec(seed, edParams)
             val privateKey = EdDSAPrivateKey(privateKeySpec)
 
-            // Sign the payload
-            val signature = Signature.getInstance("NONEwithEdDSA", "EdDSA")
-            signature.initSign(privateKey)
+            // Sign the payload - use EdDSAEngine directly
             val payloadBytes = Base64.decode(payload, Base64.NO_WRAP)
-            signature.update(payloadBytes)
-            val signatureBytes = signature.sign()
+            val sgr = net.i2p.crypto.eddsa.EdDSAEngine()
+            sgr.initSign(privateKey)
+            val signatureBytes = sgr.signOneShot(payloadBytes)
 
             val signatureBase64 = Base64.encodeToString(signatureBytes, Base64.NO_WRAP)
             promise.resolve(signatureBase64)
@@ -267,28 +291,116 @@ class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun fetchAttestation(bundleId: String, options: ReadableMap?, promise: Promise) {
         try {
-            // Create mock attestation envelope for development
-            val attestation = Arguments.createMap()
-            attestation.putString("bundleId", bundleId)
-            attestation.putString("timestamp", System.currentTimeMillis().toString())
-            attestation.putString("nonce", java.util.UUID.randomUUID().toString())
-            attestation.putString("attestationReport", "mock_attestation_report")
-            attestation.putString("signature", "mock_signature")
+            Log.d(TAG, "fetchAttestation called for bundle: $bundleId")
 
-            val certificateChain = Arguments.createArray()
-            certificateChain.pushString("mock_cert_1")
-            certificateChain.pushString("mock_cert_2")
-            attestation.putArray("certificateChain", certificateChain)
+            // Check if we should use Play Integrity (default: false for dev mode)
+            val usePlayIntegrity = options?.getBoolean("usePlayIntegrity") ?: false
 
-            val deviceInfo = Arguments.createMap()
-            deviceInfo.putString("model", android.os.Build.MODEL)
-            deviceInfo.putString("manufacturer", android.os.Build.MANUFACTURER)
-            deviceInfo.putString("androidVersion", android.os.Build.VERSION.RELEASE)
-            attestation.putMap("deviceInfo", deviceInfo)
+            // Get verifier URL: prefer value from options (passed by JS Config)
+            val verifierUrlFromOptions = if (options != null && options.hasKey("endpoint") && !options.isNull("endpoint")) options.getString("endpoint") else null
+            // Fallback to BuildConfig, then production default
+            val verifierUrl = verifierUrlFromOptions ?: try {
+                com.beam.app.BuildConfig.VERIFIER_URL
+            } catch (e: Exception) {
+                // Fallback to production verifier
+                "https://beam-verifier.vercel.app"
+            }
 
-            promise.resolve(attestation)
+            // Prepare device info
+            val deviceModel = android.os.Build.MODEL
+            val osVersion = android.os.Build.VERSION.RELEASE
+            val securityLevel = "SOFTWARE" // TODO: Check actual hardware security level
+
+            // Create mock device token for development
+            // In production, this would be a real Play Integrity token
+            val deviceToken = "dev_token_${System.currentTimeMillis()}"
+
+            // Create bundle hash (simplified for now)
+            val bundleHash = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(bundleId.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+
+            // Make HTTP request to verifier backend
+            Log.d(TAG, "Requesting attestation from verifier: $verifierUrl/api/attestation/request")
+
+            Thread {
+                try {
+                    val url = java.net.URL("$verifierUrl/api/attestation/request")
+                    val connection = url.openConnection() as java.net.HttpURLConnection
+                    connection.requestMethod = "POST"
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.doOutput = true
+                    connection.connectTimeout = 15000 // 15 seconds
+                    connection.readTimeout = 15000
+
+                    // Build request body
+                    val requestBody = JSONObject()
+                    requestBody.put("bundleId", bundleId)
+                    requestBody.put("deviceToken", deviceToken)
+                    requestBody.put("bundleHash", bundleHash)
+                    requestBody.put("timestamp", System.currentTimeMillis())
+
+                    val deviceInfoJson = JSONObject()
+                    deviceInfoJson.put("model", deviceModel)
+                    deviceInfoJson.put("osVersion", osVersion)
+                    deviceInfoJson.put("securityLevel", securityLevel)
+                    requestBody.put("deviceInfo", deviceInfoJson)
+
+                    Log.d(TAG, "Request body: ${requestBody.toString()}")
+
+                    // Send request
+                    connection.outputStream.use { os ->
+                        os.write(requestBody.toString().toByteArray())
+                    }
+
+                    val responseCode = connection.responseCode
+                    Log.d(TAG, "Verifier response code: $responseCode")
+
+                    if (responseCode == 200) {
+                        // Read response
+                        val response = connection.inputStream.bufferedReader().use { it.readText() }
+                        Log.d(TAG, "Verifier response: $response")
+
+                        val responseJson = JSONObject(response)
+
+                        // Convert to React Native map
+                        val attestation = Arguments.createMap()
+                        attestation.putString("bundleId", responseJson.getString("bundleId"))
+                        attestation.putString("timestamp", responseJson.getString("timestamp"))
+                        attestation.putString("nonce", responseJson.getString("nonce"))
+                        attestation.putString("attestationReport", responseJson.getString("attestationReport"))
+                        attestation.putString("signature", responseJson.getString("signature"))
+
+                        val certificateChain = Arguments.createArray()
+                        val certChainJson = responseJson.getJSONArray("certificateChain")
+                        for (i in 0 until certChainJson.length()) {
+                            certificateChain.pushString(certChainJson.getString(i))
+                        }
+                        attestation.putArray("certificateChain", certificateChain)
+
+                        val deviceInfoMap = Arguments.createMap()
+                        val deviceInfoResponse = responseJson.getJSONObject("deviceInfo")
+                        deviceInfoMap.putString("model", deviceInfoResponse.getString("model"))
+                        deviceInfoMap.putString("osVersion", deviceInfoResponse.getString("osVersion"))
+                        deviceInfoMap.putString("securityLevel", deviceInfoResponse.getString("securityLevel"))
+                        attestation.putMap("deviceInfo", deviceInfoMap)
+
+                        Log.d(TAG, "✅ Successfully fetched attestation from verifier")
+                        promise.resolve(attestation)
+                    } else {
+                        // Read error response
+                        val errorResponse = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
+                        Log.e(TAG, "Verifier error response: $errorResponse")
+                        promise.reject("ATTESTATION_ERROR", "Verifier returned error: $responseCode - $errorResponse")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Network error fetching attestation", e)
+                    promise.reject("ATTESTATION_ERROR", "Failed to fetch attestation from verifier: ${e.message}", e)
+                }
+            }.start()
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching attestation", e)
+            Log.e(TAG, "Error in fetchAttestation", e)
             promise.reject("ATTESTATION_ERROR", "Failed to fetch attestation: ${e.message}", e)
         }
     }
@@ -307,6 +419,92 @@ class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
         } catch (e: Exception) {
             Log.e(TAG, "Error resetting wallet", e)
             promise.reject("RESET_ERROR", "Failed to reset wallet: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun exportWallet(passphrase: String, promise: Promise) {
+        try {
+            val prefs = getSharedPrefs()
+            val encryptedSeedB64 = prefs.getString(KEY_ED25519_SEED, null)
+            val ivB64 = prefs.getString("${KEY_ED25519_SEED}_iv", null)
+
+            if (encryptedSeedB64 == null || ivB64 == null) {
+                promise.reject("WALLET_ERROR", "Wallet not initialized")
+                return
+            }
+
+            val encryptedSeed = Base64.decode(encryptedSeedB64, Base64.NO_WRAP)
+            val storedIv = Base64.decode(ivB64, Base64.NO_WRAP)
+            val seed = decrypt(encryptedSeed, storedIv)
+
+            // Derive key from passphrase and encrypt seed
+            val salt = ByteArray(16)
+            SecureRandom().nextBytes(salt)
+            val kdfIter = 200000
+            val key = pbkdf2Key(passphrase, salt, kdfIter)
+            val (ct, iv) = encryptWithKey(key, seed)
+
+            val json = JSONObject()
+            json.put("v", 1)
+            json.put("kdf", "pbkdf2-sha256")
+            json.put("iter", kdfIter)
+            json.put("salt", Base64.encodeToString(salt, Base64.NO_WRAP))
+            json.put("iv", Base64.encodeToString(iv, Base64.NO_WRAP))
+            json.put("ct", Base64.encodeToString(ct, Base64.NO_WRAP))
+
+            promise.resolve(json.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error exporting wallet", e)
+            promise.reject("EXPORT_ERROR", "Failed to export wallet: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun importWallet(passphrase: String, backup: String, promise: Promise) {
+        try {
+            val json = JSONObject(backup)
+            val version = json.optInt("v", 1)
+            if (version != 1) {
+                promise.reject("IMPORT_ERROR", "Unsupported backup version")
+                return
+            }
+            val kdf = json.getString("kdf")
+            if (kdf != "pbkdf2-sha256") {
+                promise.reject("IMPORT_ERROR", "Unsupported KDF")
+                return
+            }
+            val iter = json.optInt("iter", 200000)
+            val saltB64 = json.getString("salt")
+            val ivB64 = json.getString("iv")
+            val ctB64 = json.getString("ct")
+
+            val salt = Base64.decode(saltB64, Base64.NO_WRAP)
+            val iv = Base64.decode(ivB64, Base64.NO_WRAP)
+            val ct = Base64.decode(ctB64, Base64.NO_WRAP)
+
+            val key = pbkdf2Key(passphrase, salt, iter)
+            val seed = decryptWithKey(key, iv, ct)
+
+            // Store seed encrypted with AndroidKeyStore AES-GCM
+            val (encryptedSeed, storeIv) = encrypt(seed)
+            val prefs = getSharedPrefs()
+            prefs.edit()
+                .putString(KEY_ED25519_SEED, Base64.encodeToString(encryptedSeed, Base64.NO_WRAP))
+                .putString("${KEY_ED25519_SEED}_iv", Base64.encodeToString(storeIv, Base64.NO_WRAP))
+                .apply()
+
+            // Return new public key base64
+            val edParams = EdDSANamedCurveTable.getByName("Ed25519")
+            val privateKeySpec = EdDSAPrivateKeySpec(seed, edParams)
+            val privateKey = EdDSAPrivateKey(privateKeySpec)
+            val publicKeyBytes = privateKey.abyte
+            val publicKeyBase64 = Base64.encodeToString(publicKeyBytes, Base64.NO_WRAP)
+
+            promise.resolve(publicKeyBase64)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error importing wallet", e)
+            promise.reject("IMPORT_ERROR", "Failed to import wallet: ${e.message}", e)
         }
     }
 

@@ -14,12 +14,6 @@ module.exports = {
         android: {},
       },
     },
-    'react-native-vision-camera': {
-      platforms: {
-        ios: {},
-        android: {},
-      },
-    },
     'react-native-keychain': {
       platforms: {
         ios: {},

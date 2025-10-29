@@ -534,11 +534,9 @@ export class BLEPeripheralService {
 }
 
 // ============================================================================
-// Singleton Export
-// ============================================================================
-
 const nativeModule = NativeModule ?? new NoopBLEPeripheral();
 export const blePeripheralService = new BLEPeripheralService(nativeModule);
 
-// Export types
-export type { BLEPeripheralModule };
+// ============================================================================
+// Singleton Export
+// ============================================================================

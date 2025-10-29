@@ -4,6 +4,7 @@
  */
 
 import { Commitment } from '@solana/web3.js';
+import { VERIFIER_URL } from '@env';
 
 // Type definitions for network environments
 export type NetworkEnvironment = 'devnet' | 'mainnet-beta' | 'localnet';
@@ -155,9 +156,8 @@ export const Config = {
 
   // External Services
   services: {
-    verifier: process.env.VERIFIER_URL || 'https://beam-verifier.vercel.app',
-    usdcFaucet:
-      process.env.USDC_FAUCET_URL || 'https://beam-verifier.vercel.app/test-usdc/mint',
+    verifier: VERIFIER_URL || 'https://beam-verifier.vercel.app',
+    usdcFaucet: `${VERIFIER_URL || 'https://beam-verifier.vercel.app'}/test-usdc/mint`,
   },
 
   // Feature Flags
@@ -166,6 +166,9 @@ export const Config = {
     verboseLogging: __DEV__ || process.env.VERBOSE_LOGGING === 'true',
     // Enable transaction simulation
     enableSimulation: process.env.ENABLE_SIMULATION !== 'false',
+    // Prefer server-side submission of on-chain settlements (safer for RN)
+    useServerSettlement: process.env.USE_SERVER_SETTLEMENT === 'true',
+    useRawInstructions: process.env.USE_RAW_INSTRUCTIONS === 'true',
   },
 };
 

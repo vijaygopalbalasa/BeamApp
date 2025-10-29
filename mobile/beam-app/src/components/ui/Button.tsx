@@ -1,6 +1,7 @@
-import React from 'react';
-import { Pressable, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle } from 'react-native';
+import React, { useMemo, useRef } from 'react';
+import { Pressable, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle, Animated, Easing } from 'react-native';
 import { palette, radius, spacing, typography } from '../../design/tokens';
+import { haptics } from '../../utils/haptics';
 
 interface ButtonProps {
   label: string;
@@ -11,6 +12,7 @@ interface ButtonProps {
   disabled?: boolean;
   style?: ViewStyle;
   labelStyle?: TextStyle;
+  haptic?: boolean;
 }
 
 export function Button({
@@ -22,23 +24,55 @@ export function Button({
   disabled,
   style,
   labelStyle,
+  haptic = true,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
+  const scale = useRef(new Animated.Value(0)).current; // 0 -> 1.0, 1 -> 0.97
+
+  const animatedStyle = useMemo(
+    () => ({
+      transform: [{
+        scale: scale.interpolate({ inputRange: [0, 1], outputRange: [1, 0.97] }),
+      }],
+    }),
+    [scale]
+  );
+
+  const onPressIn = () => {
+    Animated.timing(scale, {
+      toValue: 1,
+      duration: 80,
+      useNativeDriver: true,
+      easing: Easing.out(Easing.quad),
+    }).start();
+  };
+
+  const onPressOut = () => {
+    Animated.timing(scale, {
+      toValue: 0,
+      duration: 120,
+      useNativeDriver: true,
+      easing: Easing.out(Easing.cubic),
+    }).start();
+  };
 
   return (
     <Pressable
       style={({ pressed }) => [
         styles.base,
         styles[variant],
+        // Keep slight pressed transform as a fallback; animated scale handles most cases
         pressed && !isDisabled ? styles.pressed : null,
         isDisabled ? styles.disabled : null,
         style,
       ]}
-      onPress={isDisabled ? undefined : onPress}
+      onPress={isDisabled ? undefined : () => { if (haptic) haptics.light(); onPress && onPress(); }}
+      onPressIn={isDisabled ? undefined : onPressIn}
+      onPressOut={isDisabled ? undefined : onPressOut}
       android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
     >
       {({ pressed: _pressed }) => (
-        <>
+        <Animated.View style={animatedStyle}>
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
@@ -49,7 +83,7 @@ export function Button({
               </Text>
             </>
           )}
-        </>
+        </Animated.View>
       )}
     </Pressable>
   );
@@ -64,6 +98,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
+    // Subtle shadow for depth
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   primary: {
     backgroundColor: palette.primary,

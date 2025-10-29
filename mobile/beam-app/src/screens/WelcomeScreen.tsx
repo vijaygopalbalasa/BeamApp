@@ -13,12 +13,8 @@ interface WelcomeScreenProps {
 }
 
 export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
-  const handleCustomerPath = () => {
-    navigation.navigate('WalletCreation', { role: 'customer' });
-  };
-
-  const handleMerchantPath = () => {
-    navigation.navigate('WalletCreation', { role: 'merchant' });
+  const handleGetStarted = () => {
+    navigation.navigate('WalletCreation');
   };
 
   return (
@@ -35,42 +31,25 @@ export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
         </View>
 
         <View style={styles.content}>
-          <Card style={styles.roleCard}>
-            <View style={styles.roleHeader}>
-              <HeadingM>💸 I want to pay</HeadingM>
-              <Small style={styles.roleDescription}>
-                Make secure offline payments with USDC using trusted escrow
+          <Card style={styles.mainCard}>
+            <View style={styles.cardContent}>
+              <HeadingM style={styles.cardTitle}>One Wallet, Two Roles</HeadingM>
+              <Small style={styles.cardDescription}>
+                Create a single secure wallet to both send and receive payments
               </Small>
             </View>
-            <View style={styles.featureList}>
-              <Body style={styles.feature}>✓ Create secure wallet with biometric protection</Body>
-              <Body style={styles.feature}>✓ Fund with devnet SOL and USDC</Body>
-              <Body style={styles.feature}>✓ Pay merchants even when offline</Body>
-            </View>
-            <Button
-              label="Continue as customer"
-              onPress={handleCustomerPath}
-              style={styles.primaryButton}
-            />
-          </Card>
 
-          <Card style={styles.roleCard}>
-            <View style={styles.roleHeader}>
-              <HeadingM>💰 I want to receive payments</HeadingM>
-              <Small style={styles.roleDescription}>
-                Accept offline payments via QR codes and mesh networks
-              </Small>
-            </View>
             <View style={styles.featureList}>
-              <Body style={styles.feature}>✓ Create secure wallet with biometric protection</Body>
-              <Body style={styles.feature}>✓ Generate payment QR codes instantly</Body>
-              <Body style={styles.feature}>✓ Receive payments offline, settle later</Body>
+              <Body style={styles.feature}>✓ Secure wallet with biometric protection</Body>
+              <Body style={styles.feature}>✓ Pay merchants offline with USDC</Body>
+              <Body style={styles.feature}>✓ Receive payments via QR codes</Body>
+              <Body style={styles.feature}>✓ Switch between customer and merchant anytime</Body>
             </View>
+
             <Button
-              label="Continue as merchant"
-              onPress={handleMerchantPath}
-              variant="secondary"
-              style={styles.secondaryButton}
+              label="Create Wallet & Get Started"
+              onPress={handleGetStarted}
+              style={styles.primaryButton}
             />
           </Card>
         </View>
@@ -121,15 +100,21 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
   },
-  roleCard: {
+  mainCard: {
     gap: spacing.lg,
     padding: spacing.xl,
   },
-  roleHeader: {
+  cardContent: {
     gap: spacing.sm,
+    alignItems: 'center',
   },
-  roleDescription: {
+  cardTitle: {
+    color: palette.textPrimary,
+    textAlign: 'center',
+  },
+  cardDescription: {
     color: palette.textSecondary,
+    textAlign: 'center',
   },
   featureList: {
     gap: spacing.sm,

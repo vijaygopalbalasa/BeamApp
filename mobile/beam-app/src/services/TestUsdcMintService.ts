@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Test USDC Minting Service
  * Creates and mints custom SPL tokens for testing on devnet (real devices)

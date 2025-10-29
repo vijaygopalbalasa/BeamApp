@@ -72,3 +72,11 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Secrets (GCP service account, etc.)
+beam-*-*.json
+
+# Environment variables (may contain sensitive data)
+.env
+.env.local
+.env.*.local

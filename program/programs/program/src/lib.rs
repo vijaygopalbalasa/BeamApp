@@ -27,6 +27,10 @@ pub mod beam {
         escrow.total_spent = 0;
         escrow.created_at = Clock::get()?.unix_timestamp;
         escrow.bump = ctx.bumps.escrow_account;
+        // Phase 1.3: Initialize fraud detection fields
+        escrow.stake_locked = 0;
+        escrow.fraud_count = 0;
+        escrow.last_fraud_timestamp = 0;
 
         // Transfer initial funds to escrow
         if initial_amount > 0 {
@@ -301,6 +305,47 @@ pub mod beam {
             reported_at: now,
         });
 
+        // Phase 1.3: Apply stake slashing for fraud
+        let escrow = &mut ctx.accounts.escrow_account;
+
+        // Find the fraudulent bundle to get amount
+        let fraud_bundle = registry
+            .bundle_history
+            .iter()
+            .find(|record| record.bundle_hash == bundle_hash)
+            .ok_or(BeamError::BundleHistoryNotFound)?;
+
+        // Slash 2x the payment amount
+        let slash_amount = fraud_bundle.amount.checked_mul(2)
+            .ok_or(BeamError::Overflow)?;
+
+        // Ensure sufficient balance to slash
+        require!(
+            escrow.escrow_balance >= slash_amount,
+            BeamError::InsufficientFundsForSlash
+        );
+
+        // Lock slashed funds (remove from escrow_balance, add to stake_locked)
+        escrow.escrow_balance = escrow.escrow_balance.checked_sub(slash_amount)
+            .ok_or(BeamError::Underflow)?;
+        escrow.stake_locked = escrow.stake_locked.checked_add(slash_amount)
+            .ok_or(BeamError::Overflow)?;
+
+        // Update fraud tracking
+        escrow.fraud_count = escrow.fraud_count.checked_add(1)
+            .ok_or(BeamError::Overflow)?;
+        escrow.last_fraud_timestamp = now;
+
+        // Permanently reduce reputation score
+        escrow.reputation_score = escrow.reputation_score.saturating_sub(1000);
+
+        emit!(FraudPenaltyApplied {
+            payer: escrow.owner,
+            slashed_amount: slash_amount,
+            new_reputation: escrow.reputation_score,
+            fraud_count: escrow.fraud_count,
+        });
+
         Ok(())
     }
 }
@@ -445,6 +490,13 @@ pub struct ReportFraud<'info> {
     )]
     pub nonce_registry: Account<'info, NonceRegistry>,
 
+    #[account(
+        mut,
+        seeds = [b"escrow", payer.key().as_ref()],
+        bump = escrow_account.bump
+    )]
+    pub escrow_account: Account<'info, OfflineEscrowAccount>,
+
     /// CHECK: Verified against nonce registry owner
     pub payer: UncheckedAccount<'info>,
 
@@ -462,6 +514,10 @@ pub struct OfflineEscrowAccount {
     pub total_spent: u64,
     pub created_at: i64,
     pub bump: u8,
+    // Phase 1.3: Stake slashing fields
+    pub stake_locked: u64,        // Funds locked as penalty for fraud
+    pub fraud_count: u32,          // Number of detected fraud attempts
+    pub last_fraud_timestamp: i64, // When last fraud was detected
 }
 
 #[event]
@@ -513,6 +569,14 @@ pub struct EscrowWithdrawn {
     pub remaining_balance: u64,
 }
 
+#[event]
+pub struct FraudPenaltyApplied {
+    pub payer: Pubkey,
+    pub slashed_amount: u64,
+    pub new_reputation: u16,
+    pub fraud_count: u32,
+}
+
 #[error_code]
 pub enum BeamError {
     #[msg("Invalid amount specified")]
@@ -545,4 +609,6 @@ pub enum BeamError {
     Overflow,
     #[msg("Arithmetic underflow")]
     Underflow,
+    #[msg("Insufficient funds for slash penalty")]
+    InsufficientFundsForSlash,
 }

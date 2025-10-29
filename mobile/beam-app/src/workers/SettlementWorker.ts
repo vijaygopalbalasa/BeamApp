@@ -1,7 +1,7 @@
 import { AppState } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { attestationService } from '../services/AttestationService';
-import { settlementService } from '../services/SettlementService';
+import { SettlementService } from '../services/SettlementService';
 import { wallet } from '../wallet/WalletManager';
 
 const SYNC_INTERVAL_MS = 60_000;
@@ -9,6 +9,7 @@ const SYNC_INTERVAL_MS = 60_000;
 class SettlementWorker {
   private interval: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private settlement = new SettlementService();
 
   start(): void {
     if (this.running) {
@@ -52,11 +53,11 @@ class SettlementWorker {
         return;
       }
 
-      settlementService.initializeClient(signer);
+      this.settlement.initializeClient(signer);
 
       for (const attested of attestedBundles) {
         try {
-          const settlement = await settlementService.settleBundleOnchain(attested, signer);
+          const settlement = await this.settlement.settleBundleOnchain(attested, signer);
           if (__DEV__) {
             console.log('Auto-settled bundle', settlement.bundleId, settlement.signature);
           }

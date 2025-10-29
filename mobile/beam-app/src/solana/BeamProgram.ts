@@ -7,6 +7,37 @@
  * - Deployed Slot: 415476588
  * - Purpose: Offline-first P2P payments with escrow and attestation verification
  *
+ * REACT NATIVE / HERMES COMPATIBILITY:
+ * =====================================
+ * This client implements MANUAL INSTRUCTION BUILDING to bypass Anchor's BufferLayout
+ * serialization, which fails in React Native/Hermes environments with:
+ * "Cannot read property 'size' of undefined"
+ *
+ * Root Cause:
+ * - Anchor's .instruction() method uses BufferLayout internally
+ * - BufferLayout relies on Node.js-specific Buffer behavior
+ * - Hermes engine lacks full Buffer polyfill support
+ *
+ * Solution:
+ * - All instructions manually constructed using raw discriminators from IDL
+ * - Data serialization uses Buffer.alloc() and manual encoding
+ * - Custom transaction compiler (lines 215-362) bypasses Anchor's serialization
+ * - No dependency on Anchor's method builder after initialization
+ *
+ * Manual Instruction Builders:
+ * - buildInitializeNonceRegistryInstruction() - Lines 151-180
+ * - buildInitializeEscrowInstruction() - Lines 459-498
+ * - buildSettleOfflinePaymentInstruction() - Lines 599-698
+ * - buildFundEscrowInstruction() - Lines 805-842
+ * - buildWithdrawEscrowInstruction() - Lines 880-917
+ * - buildReportFraudulentBundleInstruction() - Lines 1066-1126
+ *
+ * Each builder manually:
+ * 1. Encodes 8-byte discriminator from IDL
+ * 2. Serializes arguments (u64, strings, enums, structs)
+ * 3. Builds accounts array with correct pubkey/signer/writable flags
+ * 4. Returns TransactionInstruction ready for custom compiler
+ *
  * ACCOUNT STRUCTURES:
  *
  * 1. OfflineEscrowAccount (PDA: seeds=[b"escrow", owner])
@@ -45,9 +76,9 @@
  * 6. WithdrawEscrow: Withdraw unused funds
  */
 
-import { Connection, PublicKey, Transaction, SystemProgram, TransactionInstruction, VersionedTransaction, Commitment } from '@solana/web3.js';
-import { Program, AnchorProvider, BN, Wallet, Idl } from '@coral-xyz/anchor';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
+import { Connection, PublicKey, Transaction, SystemProgram, TransactionInstruction, Commitment } from '@solana/web3.js';
+import { Program, AnchorProvider, BN, Idl } from '@coral-xyz/anchor';
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import BeamIDL from '../idl/beam.json';
 import { Config } from '../config';
@@ -60,6 +91,8 @@ import {
   BundleHistoryEntry,
   FraudRecordEntry,
 } from './types';
+import bs58 from 'bs58';
+import { getAssociatedTokenAddress } from './utils';
 
 const PROGRAM_ID = new PublicKey(Config.program.id);
 const USDC_MINT = new PublicKey(Config.tokens.usdc.mint);
@@ -77,6 +110,20 @@ interface SettlementEvidenceArgs {
   merchantProof?: AttestationProofArgs;
 }
 
+/**
+ * Raw instruction data format that bypasses TransactionInstruction class
+ * This avoids buffer-layout serialization issues in React Native/Hermes
+ */
+interface RawInstruction {
+  programId: PublicKey;
+  keys: Array<{
+    pubkey: PublicKey;
+    isSigner: boolean;
+    isWritable: boolean;
+  }>;
+  data: Buffer;
+}
+
 export type FraudReasonKind = FraudReason;
 
 export class BeamProgramClient {
@@ -85,7 +132,7 @@ export class BeamProgramClient {
   private readonly provider: AnchorProvider | null;
   private readonly signer: BeamSigner | null;
 
-  constructor(rpcUrlOrConnection: string | Connection = Config.solana.rpcUrl, signer?: BeamSigner) {
+  constructor(rpcUrlOrConnection: string | Connection = Config.solana.rpcUrl[0], signer?: BeamSigner) {
     // Accept either an RPC URL string or an existing Connection instance
     if (typeof rpcUrlOrConnection === 'string') {
       // Create a React Native–safe Connection with explicit fetch + headers
@@ -106,47 +153,87 @@ export class BeamProgramClient {
     this.signer = signer ?? null;
 
     if (signer) {
-      // Full mode with signer for write operations. Avoid in RN for read-only.
+      const signAny = async <T extends Transaction>(tx: T): Promise<T> => {
+        const legacyTx = tx as Transaction;
+        const payer = legacyTx.feePayer ?? signer.publicKey;
+        let recentBlockhash = legacyTx.recentBlockhash;
+        if (!recentBlockhash) {
+          const latest = await this.connection.getLatestBlockhash('confirmed');
+          recentBlockhash = latest.blockhash;
+        }
+
+        const compiled = this.compileMessage(payer, legacyTx.instructions, recentBlockhash);
+        if (compiled.signerPubkeys.length !== 1 || !compiled.signerPubkeys[0].equals(signer.publicKey)) {
+          throw new Error('Unsupported signer configuration');
+        }
+        const signature = await signer.sign(compiled.message, 'Authorize Solana transaction');
+        legacyTx.feePayer = payer;
+        legacyTx.recentBlockhash = recentBlockhash;
+        legacyTx.signatures = compiled.signerPubkeys.map(pubkey => ({
+          publicKey: pubkey,
+          signature: pubkey.equals(signer.publicKey) ? Buffer.from(signature) : null,
+        }));
+        return legacyTx as T;
+      };
+
       const anchorWallet: any = {
         publicKey: signer.publicKey,
-        signTransaction: async <T extends Transaction | VersionedTransaction>(tx: T): Promise<T> => {
-          const anyTx: any = tx as any;
-          if (typeof anyTx.serializeMessage === 'function') {
-            const message = anyTx.serializeMessage();
-            const signature = await signer.sign(message, 'Authorize Solana transaction');
-            if (typeof anyTx.addSignature === 'function') {
-              anyTx.addSignature(signer.publicKey, Buffer.from(signature));
-            }
-          }
-          return tx as T;
-        },
-        signAllTransactions: async <T extends Transaction | VersionedTransaction>(txs: T[]): Promise<T[]> => {
-          for (const t of txs as any[]) {
-            if (typeof t.serializeMessage === 'function') {
-              const message = t.serializeMessage();
-              const signature = await signer.sign(message, 'Authorize Solana transaction');
-              if (typeof t.addSignature === 'function') {
-                t.addSignature(signer.publicKey, Buffer.from(signature));
-              }
-            }
-          }
-          return txs as T[];
-        },
+        signTransaction: signAny,
+        signAllTransactions: async <T extends Transaction>(txs: T[]): Promise<T[]> =>
+          Promise.all(txs.map(tx => signAny(tx))),
       };
 
       this.provider = new (AnchorProvider as any)(this.connection, anchorWallet, {
         commitment: Config.solana.commitment,
       }) as any;
-      this.program = new (Program as any)(BeamIDL as Idl, PROGRAM_ID, this.provider as any) as any;
+
+      // CRITICAL FIX: DO NOT instantiate Anchor Program in React Native/Hermes
+      // Anchor's Program class uses buffer-layout for serialization, which has
+      // the "Cannot read property 'size' of undefined" error in Hermes engine.
+      // We use manual instruction building instead (buildInitializeEscrowInstruction, etc.)
+      this.program = null;
+      console.log('[BeamProgram] Constructor: Skipping Anchor Program instantiation (using manual instructions)');
     } else {
       // Read-only mode: avoid constructing Anchor Provider/Program to prevent RN runtime issues
       this.provider = null;
       this.program = null;
+      console.log('[BeamProgram] Constructor: Read-only mode (no signer provided)');
     }
   }
 
+  /**
+   * Manually builds initializeNonceRegistry instruction without Anchor's BufferLayout
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [34, 149, 53, 133, 236, 53, 88, 85]
+   * - No args (nonce registry has no parameters)
+   */
+  private buildInitializeNonceRegistryInstruction(
+    payer: PublicKey,
+    nonceRegistry: PublicKey
+  ): RawInstruction {
+    // Instruction discriminator from IDL (lines 150-158)
+    const discriminator = Buffer.from([34, 149, 53, 133, 236, 53, 88, 85]);
+
+    // No additional data - discriminator only
+    const data = discriminator;
+
+    // Build accounts array according to IDL order (lines 160-192)
+    const keys = [
+      { pubkey: payer, isSigner: true, isWritable: true },             // payer (signer, writable)
+      { pubkey: nonceRegistry, isSigner: false, isWritable: true },    // nonce_registry (PDA, writable)
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data,
+    };
+  }
+
   async ensureNonceRegistry(): Promise<void> {
-    if (!this.signer || !this.program) {
+    if (!this.signer) {
       throw new Error('Signer required for write operations');
     }
 
@@ -156,14 +243,18 @@ export class BeamProgramClient {
       return;
     }
 
-    await this.program.methods
-      .initializeNonceRegistry()
-      .accounts({
-        payer: this.signer.publicKey,
-        nonceRegistry,
-        systemProgram: SystemProgram.programId,
-      })
-      .rpc();
+    // CRITICAL FIX: Manually build instruction to bypass Anchor's BufferLayout serialization
+    console.log('[BeamProgram] Building initializeNonceRegistry instruction manually...');
+    const instruction = this.buildInitializeNonceRegistryInstruction(
+      this.signer.publicKey,
+      nonceRegistry
+    );
+
+    await this.signAndBroadcast(
+      this.signer.publicKey,
+      [instruction],
+      'Initialize Nonce Registry',
+    );
   }
 
   findEscrowPDA(owner: PublicKey): [PublicKey, number] {
@@ -172,6 +263,193 @@ export class BeamProgramClient {
 
   findNonceRegistry(owner: PublicKey): [PublicKey, number] {
     return PublicKey.findProgramAddressSync([Buffer.from('nonce'), owner.toBuffer()], PROGRAM_ID);
+  }
+
+  private compileMessage(
+    payer: PublicKey,
+    instructions: RawInstruction[],
+    recentBlockhash: string,
+  ) {
+    type Meta = {
+      pubkey: PublicKey;
+      isSigner: boolean;
+      isWritable: boolean;
+      isPayer: boolean;
+      appearance: number;
+    };
+
+    const metas = new Map<string, Meta>();
+    let appearanceCounter = 0;
+
+    const addMeta = (pubkey: PublicKey, opts: Partial<Meta>) => {
+      const key = pubkey.toBase58();
+      const existing = metas.get(key);
+      if (existing) {
+        existing.isSigner = existing.isSigner || !!opts.isSigner;
+        existing.isWritable = existing.isWritable || !!opts.isWritable;
+        existing.isPayer = existing.isPayer || !!opts.isPayer;
+        return existing;
+      }
+      const meta: Meta = {
+        pubkey,
+        isSigner: !!opts.isSigner,
+        isWritable: !!opts.isWritable,
+        isPayer: !!opts.isPayer,
+        appearance: opts.appearance ?? appearanceCounter++,
+      };
+      metas.set(key, meta);
+      return meta;
+    };
+
+    addMeta(payer, { isSigner: true, isWritable: true, isPayer: true, appearance: -1 });
+
+    instructions.forEach(ix => {
+      addMeta(ix.programId, { isSigner: false, isWritable: false });
+      ix.keys.forEach(meta => {
+        addMeta(meta.pubkey, {
+          isSigner: meta.isSigner,
+          isWritable: meta.isWritable,
+        });
+      });
+    });
+
+    const rank = (meta: Meta) => {
+      if (meta.isPayer) return 0;
+      if (meta.isSigner && meta.isWritable) return 1;
+      if (meta.isSigner) return 2;
+      if (meta.isWritable) return 3;
+      return 4;
+    };
+
+    const orderedMetas = Array.from(metas.values()).sort((a, b) => {
+      const r = rank(a) - rank(b);
+      if (r !== 0) return r;
+      return a.appearance - b.appearance;
+    });
+
+    const accountKeys = orderedMetas.map(meta => meta.pubkey);
+    const numRequiredSignatures = orderedMetas.filter(meta => meta.isSigner).length;
+    const numReadonlySigned = orderedMetas.filter(meta => meta.isSigner && !meta.isWritable).length;
+    const numReadonlyUnsigned = orderedMetas.filter(meta => !meta.isSigner && !meta.isWritable).length;
+
+    const accountIndex = new Map<string, number>();
+    accountKeys.forEach((pubkey, index) => {
+      accountIndex.set(pubkey.toBase58(), index);
+    });
+
+    const message: number[] = [];
+    message.push(numRequiredSignatures, numReadonlySigned, numReadonlyUnsigned);
+
+    this.pushBytes(message, this.encodeLength(accountKeys.length));
+    accountKeys.forEach(pubkey => this.pushBytes(message, pubkey.toBuffer()));
+
+    this.pushBytes(message, bs58.decode(recentBlockhash));
+
+    this.pushBytes(message, this.encodeLength(instructions.length));
+
+    instructions.forEach(ix => {
+      const programIndex = accountIndex.get(ix.programId.toBase58());
+      if (programIndex === undefined) {
+        throw new Error('Program ID not found in account list');
+      }
+      message.push(programIndex);
+
+      const indices = ix.keys.map(meta => {
+        const idx = accountIndex.get(meta.pubkey.toBase58());
+        if (idx === undefined) {
+          throw new Error('Instruction account not found in account list');
+        }
+        return idx;
+      });
+
+      this.pushBytes(message, this.encodeLength(indices.length));
+      this.pushBytes(message, Uint8Array.from(indices));
+
+      const dataBytes = ix.data instanceof Uint8Array ? ix.data : Uint8Array.from(ix.data);
+      this.pushBytes(message, this.encodeLength(dataBytes.length));
+      this.pushBytes(message, dataBytes);
+    });
+
+    return {
+      message: Uint8Array.from(message),
+      signerPubkeys: accountKeys.slice(0, numRequiredSignatures),
+      accountKeys,
+    };
+  }
+
+  private encodeLength(length: number): Uint8Array {
+    const out: number[] = [];
+    let rem = length;
+    while (true) {
+      let elem = rem & 0x7f;
+      rem >>= 7;
+      if (rem === 0) {
+        out.push(elem);
+        break;
+      } else {
+        out.push(elem | 0x80);
+      }
+    }
+    return Uint8Array.from(out);
+  }
+
+  private pushBytes(target: number[], bytes: Uint8Array | Buffer | number[]) {
+    if (Array.isArray(bytes)) {
+      for (const b of bytes) target.push(b);
+      return;
+    }
+    for (const b of bytes) target.push(b);
+  }
+
+  private concatUint8(arrays: (Uint8Array | Buffer)[]): Uint8Array {
+    const total = arrays.reduce((sum, arr) => sum + arr.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    arrays.forEach(arr => {
+      const bytes = arr instanceof Uint8Array ? arr : new Uint8Array(arr);
+      out.set(bytes, offset);
+      offset += bytes.length;
+    });
+    return out;
+  }
+
+  private async signAndBroadcast(
+    payer: PublicKey,
+    instructions: RawInstruction[],
+    prompt: string,
+  ): Promise<string> {
+    if (!this.signer) throw new Error('Signer required');
+
+    const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+    const compiled = this.compileMessage(payer, instructions, blockhash);
+
+    if (compiled.signerPubkeys.length !== 1 || !compiled.signerPubkeys[0].equals(this.signer.publicKey)) {
+      throw new Error('Unsupported signer configuration');
+    }
+
+    const signature = await this.signer.sign(compiled.message, prompt);
+    if (signature.length !== 64) {
+      throw new Error('Invalid signature length');
+    }
+
+    const wire = this.concatUint8([
+      this.encodeLength(compiled.signerPubkeys.length),
+      Buffer.from(signature),
+      compiled.message,
+    ]);
+
+    const txSignature = await this.connection.sendRawTransaction(wire, {
+      skipPreflight: false,
+      preflightCommitment: 'confirmed',
+    });
+
+    await this.connection.confirmTransaction({
+      signature: txSignature,
+      blockhash,
+      lastValidBlockHeight,
+    }, 'confirmed');
+
+    return txSignature;
   }
 
 
@@ -259,63 +537,254 @@ export class BeamProgramClient {
     return escrow?.escrowBalance || 0;
   }
 
+  /**
+   * Manually builds initializeEscrow instruction without Anchor's BufferLayout
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [243, 160, 77, 153, 11, 92, 48, 209]
+   * - initial_amount (8 bytes): u64 little-endian
+   */
+  private buildInitializeEscrowInstruction(
+    escrowAccount: PublicKey,
+    owner: PublicKey,
+    ownerTokenAccount: PublicKey,
+    escrowTokenAccount: PublicKey,
+    initialAmount: number
+  ): RawInstruction {
+    // Instruction discriminator from IDL (lines 82-90)
+    const discriminator = Buffer.from([243, 160, 77, 153, 11, 92, 48, 209]);
+
+    // Encode initial_amount as u64 little-endian
+    const amountBuffer = Buffer.alloc(8);
+    amountBuffer.writeBigUInt64LE(BigInt(initialAmount), 0);
+
+    // Concatenate discriminator + amount
+    const data = Buffer.concat([discriminator, amountBuffer]);
+
+    // Build accounts array according to IDL order (lines 92-137)
+    const keys = [
+      { pubkey: escrowAccount, isSigner: false, isWritable: true },    // escrow_account (PDA, writable)
+      { pubkey: owner, isSigner: true, isWritable: true },             // owner (signer, writable - pays rent)
+      { pubkey: ownerTokenAccount, isSigner: false, isWritable: true }, // owner_token_account (writable)
+      { pubkey: escrowTokenAccount, isSigner: false, isWritable: true }, // escrow_token_account (writable)
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data,
+    };
+  }
+
   async initializeEscrow(initialAmount: number): Promise<string> {
-    if (!this.signer || !this.program) {
+    if (!this.signer) {
       throw new Error('Signer required for write operations');
     }
 
     try {
+      console.log('[BeamProgram] initializeEscrow: Starting escrow creation...');
+      console.log('[BeamProgram] Step 1: Ensuring nonce registry...');
       await this.ensureNonceRegistry();
+      console.log('[BeamProgram] Step 1: ✅ Nonce registry ensured');
 
+      console.log('[BeamProgram] Step 2: Getting owner public key...');
       const ownerPubkey = this.signer.publicKey;
+      console.log(`[BeamProgram] Step 2: ✅ Owner pubkey: ${ownerPubkey.toBase58()}`);
+
+      console.log('[BeamProgram] Step 3: Finding escrow PDA...');
       const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
+      console.log(`[BeamProgram] Step 3: ✅ Escrow PDA: ${escrowPDA.toBase58()}`);
 
-      const preInstructions: TransactionInstruction[] = [];
+      console.log('[BeamProgram] Step 4: Initializing instructions array...');
+      const instructions: RawInstruction[] = [];
+      console.log('[BeamProgram] Step 4: ✅ Instructions array initialized');
 
-      const ownerTokenAccount = await getAssociatedTokenAddress(USDC_MINT, ownerPubkey);
+      // Check and create owner token account if needed
+      console.log('[BeamProgram] Step 5: Deriving owner token account...');
+      const ownerTokenAccount = await getAssociatedTokenAddress(
+        USDC_MINT,
+        ownerPubkey,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      console.log(`[BeamProgram] Step 5: ✅ Owner token account: ${ownerTokenAccount.toBase58()}`);
+
+      console.log('[BeamProgram] Step 6: Checking owner token account existence...');
       const ownerTokenInfo = await this.connection.getAccountInfo(ownerTokenAccount);
+      console.log(`[BeamProgram] Step 6: ✅ Owner token info: ${ownerTokenInfo ? 'EXISTS' : 'NULL'}`);
+
       if (!ownerTokenInfo) {
-        preInstructions.push(
-          createAssociatedTokenAccountInstruction(
-            ownerPubkey,
-            ownerTokenAccount,
-            ownerPubkey,
-            USDC_MINT
-          )
+        console.log('[BeamProgram] Step 6a: Creating owner token account instruction...');
+        const ataInstruction = createAssociatedTokenAccountInstruction(
+          ownerPubkey,
+          ownerTokenAccount,
+          ownerPubkey,
+          USDC_MINT
         );
+        console.log('[BeamProgram] Step 6b: Converting to RawInstruction...');
+        // Convert TransactionInstruction to RawInstruction
+        instructions.push({
+          programId: ataInstruction.programId,
+          keys: ataInstruction.keys,
+          data: Buffer.from(ataInstruction.data),
+        });
+        console.log('[BeamProgram] Step 6c: ✅ Owner token account instruction added');
       }
 
-      const escrowTokenAccount = await getAssociatedTokenAddress(USDC_MINT, escrowPDA, true);
+      // Check and create escrow token account if needed
+      console.log('[BeamProgram] Step 7: Deriving escrow token account...');
+      const escrowTokenAccount = await getAssociatedTokenAddress(
+        USDC_MINT,
+        escrowPDA,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+      console.log(`[BeamProgram] Step 7: ✅ Escrow token account: ${escrowTokenAccount.toBase58()}`);
       const escrowTokenInfo = await this.connection.getAccountInfo(escrowTokenAccount);
       if (!escrowTokenInfo) {
-        preInstructions.push(
-          createAssociatedTokenAccountInstruction(
-            ownerPubkey,
-            escrowTokenAccount,
-            escrowPDA,
-            USDC_MINT
-          )
+        console.log('[BeamProgram] Creating escrow token account...');
+        const ataInstruction = createAssociatedTokenAccountInstruction(
+          ownerPubkey,
+          escrowTokenAccount,
+          escrowPDA,
+          USDC_MINT
         );
+        // Convert TransactionInstruction to RawInstruction
+        instructions.push({
+          programId: ataInstruction.programId,
+          keys: ataInstruction.keys,
+          data: Buffer.from(ataInstruction.data),
+        });
       }
 
-      const tx = await this.program.methods
-        .initializeEscrow(new BN(initialAmount))
-        .accounts({
-          escrowAccount: escrowPDA,
-          owner: ownerPubkey,
-          ownerTokenAccount,
-          escrowTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .preInstructions(preInstructions)
-        .rpc();
+      // CRITICAL FIX: Manually build instruction to bypass Anchor's BufferLayout serialization
+      // This avoids "Cannot read property 'size' of undefined" error in React Native/Hermes
+      console.log('[BeamProgram] Building initializeEscrow instruction manually...');
+      const escrowInstruction = this.buildInitializeEscrowInstruction(
+        escrowPDA,
+        ownerPubkey,
+        ownerTokenAccount,
+        escrowTokenAccount,
+        initialAmount
+      );
 
-      return tx;
+      instructions.push(escrowInstruction);
+
+      console.log('[BeamProgram] Submitting escrow transaction...');
+      const txSignature = await this.signAndBroadcast(
+        ownerPubkey,
+        instructions,
+        'Create Escrow Account',
+      );
+      console.log('[BeamProgram] ✅ Escrow created successfully!', txSignature);
+      return txSignature;
     } catch (err) {
-      console.error('Error initializing escrow:', err);
+      console.error('[BeamProgram] Error initializing escrow:', err);
       throw new Error(`Failed to initialize escrow: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Manually builds settleOfflinePayment instruction without Anchor's BufferLayout
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [48, 91, 112, 242, 39, 5, 142, 80]
+   * - amount (8 bytes): u64 little-endian
+   * - payer_nonce (8 bytes): u64 little-endian
+   * - bundle_id (variable): string (4-byte length prefix + UTF-8 bytes)
+   * - evidence (variable): SettlementEvidence struct with Options
+   */
+  private buildSettleOfflinePaymentInstruction(
+    escrowAccount: PublicKey,
+    owner: PublicKey,
+    payer: PublicKey,
+    merchant: PublicKey,
+    escrowTokenAccount: PublicKey,
+    merchantTokenAccount: PublicKey,
+    nonceRegistry: PublicKey,
+    amount: number,
+    payerNonce: number,
+    bundleId: string,
+    evidence: any
+  ): RawInstruction {
+    // Instruction discriminator from IDL (lines 270-278)
+    const discriminator = Buffer.from([48, 91, 112, 242, 39, 5, 142, 80]);
+
+    // Encode amount as u64 little-endian
+    const amountBuffer = Buffer.alloc(8);
+    amountBuffer.writeBigUInt64LE(BigInt(amount), 0);
+
+    // Encode payer_nonce as u64 little-endian
+    const nonceBuffer = Buffer.alloc(8);
+    nonceBuffer.writeBigUInt64LE(BigInt(payerNonce), 0);
+
+    // Encode bundle_id as string (4-byte length prefix + UTF-8)
+    const bundleIdBytes = Buffer.from(bundleId, 'utf-8');
+    const bundleIdLengthBuffer = Buffer.alloc(4);
+    bundleIdLengthBuffer.writeUInt32LE(bundleIdBytes.length, 0);
+    const bundleIdData = Buffer.concat([bundleIdLengthBuffer, bundleIdBytes]);
+
+    // Encode SettlementEvidence struct
+    // SettlementEvidence has two Option<AttestationProof> fields
+    const evidenceBuffers: Buffer[] = [];
+
+    // payer_proof: Option<AttestationProof>
+    if (evidence.payerProof) {
+      evidenceBuffers.push(Buffer.from([1])); // Some(T) = 1
+      // AttestationProof: attestation_root (32 bytes) + attestation_nonce (32 bytes) + timestamp (8 bytes i64) + signature (64 bytes)
+      evidenceBuffers.push(Buffer.from(evidence.payerProof.attestationRoot));
+      evidenceBuffers.push(Buffer.from(evidence.payerProof.attestationNonce));
+      const timestampBuffer = Buffer.alloc(8);
+      timestampBuffer.writeBigInt64LE(BigInt(evidence.payerProof.attestationTimestamp), 0);
+      evidenceBuffers.push(timestampBuffer);
+      evidenceBuffers.push(Buffer.from(evidence.payerProof.verifierSignature));
+    } else {
+      evidenceBuffers.push(Buffer.from([0])); // None = 0
+    }
+
+    // merchant_proof: Option<AttestationProof>
+    if (evidence.merchantProof) {
+      evidenceBuffers.push(Buffer.from([1])); // Some(T) = 1
+      evidenceBuffers.push(Buffer.from(evidence.merchantProof.attestationRoot));
+      evidenceBuffers.push(Buffer.from(evidence.merchantProof.attestationNonce));
+      const timestampBuffer = Buffer.alloc(8);
+      timestampBuffer.writeBigInt64LE(BigInt(evidence.merchantProof.attestationTimestamp), 0);
+      evidenceBuffers.push(timestampBuffer);
+      evidenceBuffers.push(Buffer.from(evidence.merchantProof.verifierSignature));
+    } else {
+      evidenceBuffers.push(Buffer.from([0])); // None = 0
+    }
+
+    const evidenceData = Buffer.concat(evidenceBuffers);
+
+    // Concatenate all data
+    const data = Buffer.concat([
+      discriminator,
+      amountBuffer,
+      nonceBuffer,
+      bundleIdData,
+      evidenceData,
+    ]);
+
+    // Build accounts array according to IDL order (lines 280-352)
+    const keys = [
+      { pubkey: escrowAccount, isSigner: false, isWritable: true },      // escrow_account (PDA, writable)
+      { pubkey: owner, isSigner: false, isWritable: false },             // owner (readonly, relation check)
+      { pubkey: payer, isSigner: true, isWritable: false },              // payer (signer)
+      { pubkey: merchant, isSigner: false, isWritable: false },          // merchant (readonly)
+      { pubkey: escrowTokenAccount, isSigner: false, isWritable: true }, // escrow_token_account (writable)
+      { pubkey: merchantTokenAccount, isSigner: false, isWritable: true }, // merchant_token_account (writable)
+      { pubkey: nonceRegistry, isSigner: false, isWritable: true },      // nonce_registry (PDA, writable)
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },  // token_program
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data,
+    };
   }
 
   /**
@@ -375,48 +844,104 @@ export class BeamProgramClient {
       const [escrowPDA] = this.findEscrowPDA(payerPubkey);
       const [nonceRegistry] = this.findNonceRegistry(payerPubkey);
       const escrowTokenAccount = await this.getEscrowTokenAccount(escrowPDA);
-      const merchantTokenAccount = await getAssociatedTokenAddress(USDC_MINT, merchantPubkey);
+      const merchantTokenAccount = await getAssociatedTokenAddress(
+        USDC_MINT,
+        merchantPubkey,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
 
-      const preInstructions = [];
+      const preInstructions: RawInstruction[] = [];
       const merchantAccountInfo = await this.connection.getAccountInfo(merchantTokenAccount);
       if (!merchantAccountInfo) {
         // Create merchant's ATA if it doesn't exist (payer pays rent)
-        preInstructions.push(
-          createAssociatedTokenAccountInstruction(
-            payerPubkey,
-            merchantTokenAccount,
-            merchantPubkey,
-            USDC_MINT
-          )
+        const ataInstruction = createAssociatedTokenAccountInstruction(
+          payerPubkey,
+          merchantTokenAccount,
+          merchantPubkey,
+          USDC_MINT
         );
+        // Convert TransactionInstruction to RawInstruction
+        preInstructions.push({
+          programId: ataInstruction.programId,
+          keys: ataInstruction.keys,
+          data: Buffer.from(ataInstruction.data),
+        });
       }
 
       const formattedEvidence = this.formatEvidence(evidence);
 
-      const tx = await this.program.methods
-        .settleOfflinePayment(new BN(amount), new BN(nonce), bundleId, formattedEvidence)
-        .accounts({
-          escrowAccount: escrowPDA,
-          owner: payerPubkey,
-          payer: payerPubkey,
-          merchant: merchantPubkey,
-          escrowTokenAccount,
-          merchantTokenAccount,
-          nonceRegistry,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .preInstructions(preInstructions)
-        .rpc();
+      // CRITICAL FIX: Manually build instruction to bypass Anchor's BufferLayout serialization
+      console.log('[BeamProgram] Building settleOfflinePayment instruction manually...');
+      const settlementInstruction = this.buildSettleOfflinePaymentInstruction(
+        escrowPDA,
+        payerPubkey,  // owner
+        payerPubkey,  // payer (signer)
+        merchantPubkey,
+        escrowTokenAccount,
+        merchantTokenAccount,
+        nonceRegistry,
+        amount,
+        nonce,
+        bundleId,
+        formattedEvidence
+      );
 
-      return tx;
+      // Build transaction with pre-instructions
+      const txSignature = await this.signAndBroadcast(
+        payerPubkey,
+        [...preInstructions, settlementInstruction],
+        'Settle Offline Payment',
+      );
+
+      return txSignature;
     } catch (err) {
       console.error('Error settling offline payment:', err);
       throw new Error(`Failed to settle payment: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
+  /**
+   * Manually builds fundEscrow instruction without Anchor's BufferLayout
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [155, 18, 218, 141, 182, 213, 69, 201]
+   * - amount (8 bytes): u64 little-endian
+   */
+  private buildFundEscrowInstruction(
+    escrowAccount: PublicKey,
+    owner: PublicKey,
+    ownerTokenAccount: PublicKey,
+    escrowTokenAccount: PublicKey,
+    amount: number
+  ): RawInstruction {
+    // Instruction discriminator from IDL (lines 15-23)
+    const discriminator = Buffer.from([155, 18, 218, 141, 182, 213, 69, 201]);
+
+    // Encode amount as u64 little-endian
+    const amountBuffer = Buffer.alloc(8);
+    amountBuffer.writeBigUInt64LE(BigInt(amount), 0);
+
+    const data = Buffer.concat([discriminator, amountBuffer]);
+
+    // Build accounts array according to IDL order (lines 25-68)
+    const keys = [
+      { pubkey: escrowAccount, isSigner: false, isWritable: true },      // escrow_account (PDA, writable)
+      { pubkey: owner, isSigner: true, isWritable: true },               // owner (signer, writable)
+      { pubkey: ownerTokenAccount, isSigner: false, isWritable: true },  // owner_token_account (writable)
+      { pubkey: escrowTokenAccount, isSigner: false, isWritable: true }, // escrow_token_account (writable)
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },  // token_program
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data,
+    };
+  }
+
   async fundEscrow(amount: number): Promise<string> {
-    if (!this.signer || !this.program) {
+    if (!this.signer) {
       throw new Error('Signer required for write operations');
     }
 
@@ -424,29 +949,79 @@ export class BeamProgramClient {
       const ownerPubkey = this.signer.publicKey;
       const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
 
-      const ownerTokenAccount = await getAssociatedTokenAddress(USDC_MINT, ownerPubkey);
+      const ownerTokenAccount = await getAssociatedTokenAddress(
+        USDC_MINT,
+        ownerPubkey,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
       const escrowTokenAccount = await this.getEscrowTokenAccount(escrowPDA);
 
-      const tx = await this.program.methods
-        .fundEscrow(new BN(amount))
-        .accounts({
-          escrowAccount: escrowPDA,
-          owner: ownerPubkey,
-          ownerTokenAccount,
-          escrowTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+      // CRITICAL FIX: Manually build instruction to bypass Anchor's BufferLayout serialization
+      console.log('[BeamProgram] Building fundEscrow instruction manually...');
+      const instruction = this.buildFundEscrowInstruction(
+        escrowPDA,
+        ownerPubkey,
+        ownerTokenAccount,
+        escrowTokenAccount,
+        amount
+      );
 
-      return tx;
+      // Build and sign transaction manually
+      const txSignature = await this.signAndBroadcast(
+        ownerPubkey,
+        [instruction],
+        'Fund Escrow',
+      );
+
+      return txSignature;
     } catch (err) {
       console.error('Error funding escrow:', err);
       throw new Error(`Failed to fund escrow: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
+  /**
+   * Manually builds withdrawEscrow instruction without Anchor's BufferLayout
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [81, 84, 226, 128, 245, 47, 96, 104]
+   * - amount (8 bytes): u64 little-endian
+   */
+  private buildWithdrawEscrowInstruction(
+    escrowAccount: PublicKey,
+    owner: PublicKey,
+    ownerTokenAccount: PublicKey,
+    escrowTokenAccount: PublicKey,
+    amount: number
+  ): RawInstruction {
+    // Instruction discriminator from IDL (lines 381-389)
+    const discriminator = Buffer.from([81, 84, 226, 128, 245, 47, 96, 104]);
+
+    // Encode amount as u64 little-endian
+    const amountBuffer = Buffer.alloc(8);
+    amountBuffer.writeBigUInt64LE(BigInt(amount), 0);
+
+    const data = Buffer.concat([discriminator, amountBuffer]);
+
+    // Build accounts array according to IDL order (lines 391-435)
+    const keys = [
+      { pubkey: escrowAccount, isSigner: false, isWritable: true },      // escrow_account (PDA, writable)
+      { pubkey: owner, isSigner: true, isWritable: true },               // owner (signer, writable)
+      { pubkey: ownerTokenAccount, isSigner: false, isWritable: true },  // owner_token_account (writable)
+      { pubkey: escrowTokenAccount, isSigner: false, isWritable: true }, // escrow_token_account (writable)
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },  // token_program
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data,
+    };
+  }
+
   async withdrawEscrow(amount: number): Promise<string> {
-    if (!this.signer || !this.program) {
+    if (!this.signer) {
       throw new Error('Signer required for write operations');
     }
 
@@ -454,21 +1029,32 @@ export class BeamProgramClient {
       const ownerPubkey = this.signer.publicKey;
       const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
 
-      const ownerTokenAccount = await getAssociatedTokenAddress(USDC_MINT, ownerPubkey);
+      const ownerTokenAccount = await getAssociatedTokenAddress(
+        USDC_MINT,
+        ownerPubkey,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
       const escrowTokenAccount = await this.getEscrowTokenAccount(escrowPDA);
 
-      const tx = await this.program.methods
-        .withdrawEscrow(new BN(amount))
-        .accounts({
-          escrowAccount: escrowPDA,
-          owner: ownerPubkey,
-          ownerTokenAccount,
-          escrowTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+      // CRITICAL FIX: Manually build instruction to bypass Anchor's BufferLayout serialization
+      console.log('[BeamProgram] Building withdrawEscrow instruction manually...');
+      const instruction = this.buildWithdrawEscrowInstruction(
+        escrowPDA,
+        ownerPubkey,
+        ownerTokenAccount,
+        escrowTokenAccount,
+        amount
+      );
 
-      return tx;
+      // Build and sign transaction manually
+      const txSignature = await this.signAndBroadcast(
+        ownerPubkey,
+        [instruction],
+        'Withdraw from Escrow',
+      );
+
+      return txSignature;
     } catch (err) {
       console.error('Error withdrawing from escrow:', err);
       throw new Error(`Failed to withdraw from escrow: ${err instanceof Error ? err.message : String(err)}`);
@@ -586,28 +1172,96 @@ export class BeamProgramClient {
     }
   }
 
+  /**
+   * Manually builds reportFraudulentBundle instruction without Anchor's BufferLayout
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [42, 97, 16, 195, 32, 174, 213, 89]
+   * - bundle_id (variable): string (4-byte length prefix + UTF-8)
+   * - conflicting_hash (32 bytes): [u8; 32]
+   * - reason (variable): FraudReason enum
+   */
+  private buildReportFraudulentBundleInstruction(
+    nonceRegistry: PublicKey,
+    payer: PublicKey,
+    reporter: PublicKey,
+    bundleId: string,
+    conflictingHash: Uint8Array,
+    reason: FraudReasonKind
+  ): RawInstruction {
+    // Instruction discriminator from IDL (lines 200-208)
+    const discriminator = Buffer.from([42, 97, 16, 195, 32, 174, 213, 89]);
+
+    // Encode bundle_id as string (4-byte length prefix + UTF-8)
+    const bundleIdBytes = Buffer.from(bundleId, 'utf-8');
+    const bundleIdLengthBuffer = Buffer.alloc(4);
+    bundleIdLengthBuffer.writeUInt32LE(bundleIdBytes.length, 0);
+    const bundleIdData = Buffer.concat([bundleIdLengthBuffer, bundleIdBytes]);
+
+    // Encode conflicting_hash (32 bytes)
+    const conflictingHashBuffer = Buffer.from(conflictingHash);
+
+    // Encode FraudReason enum (1-byte discriminator)
+    // DuplicateBundle = 0, InvalidAttestation = 1, Other = 2
+    let reasonBuffer: Buffer;
+    if (reason === 'duplicateBundle') {
+      reasonBuffer = Buffer.from([0]);
+    } else if (reason === 'invalidAttestation') {
+      reasonBuffer = Buffer.from([1]);
+    } else {
+      reasonBuffer = Buffer.from([2]); // 'other'
+    }
+
+    // Concatenate all data
+    const data = Buffer.concat([
+      discriminator,
+      bundleIdData,
+      conflictingHashBuffer,
+      reasonBuffer,
+    ]);
+
+    // Build accounts array according to IDL order (lines 210-240)
+    const keys = [
+      { pubkey: nonceRegistry, isSigner: false, isWritable: true }, // nonce_registry (PDA, writable)
+      { pubkey: payer, isSigner: false, isWritable: false },        // payer (readonly)
+      { pubkey: reporter, isSigner: true, isWritable: false },      // reporter (signer)
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data,
+    };
+  }
+
   async reportFraudulentBundle(
     bundleId: string,
     payer: PublicKey,
     conflictingHash: Uint8Array,
     reason: FraudReasonKind
   ): Promise<string> {
-    if (!this.signer || !this.program) {
+    if (!this.signer) {
       throw new Error('Signer required for write operations');
     }
 
     const [nonceRegistry] = this.findNonceRegistry(payer);
-    const reasonArg = this.formatFraudReason(reason);
     try {
-      const tx = await this.program.methods
-        .reportFraudulentBundle(bundleId, Array.from(conflictingHash), reasonArg)
-        .accounts({
-          nonceRegistry,
-          payer,
-          reporter: this.signer.publicKey,
-        })
-        .rpc();
-      return tx;
+      // CRITICAL FIX: Manually build instruction to bypass Anchor's BufferLayout serialization
+      console.log('[BeamProgram] Building reportFraudulentBundle instruction manually...');
+      const instruction = this.buildReportFraudulentBundleInstruction(
+        nonceRegistry,
+        payer,
+        this.signer.publicKey,
+        bundleId,
+        conflictingHash,
+        reason
+      );
+
+      return await this.signAndBroadcast(
+        this.signer.publicKey,
+        [instruction],
+        'Report Fraudulent Bundle',
+      );
     } catch (err) {
       console.error('Error reporting fraud evidence:', err);
       throw new Error(`Failed to report fraud evidence: ${err instanceof Error ? err.message : String(err)}`);

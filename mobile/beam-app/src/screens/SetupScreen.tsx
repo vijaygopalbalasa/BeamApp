@@ -31,14 +31,11 @@ export function SetupScreen({ navigation }: SetupScreenProps) {
       setHasWallet(true);
       setPublicKey(pubkey.toBase58());
 
-      // Check if escrow exists
-      const signer = await wallet.getSigner();
-      if (signer) {
-        const client = new BeamProgramClient(Config.solana.rpcUrl, signer);
-        const escrow = await client.getEscrowAccount(pubkey);
-        if (escrow) {
-          setHasEscrow(true);
-        }
+      // Check if escrow exists (read-only - no signer needed)
+      const readOnlyClient = new BeamProgramClient(Config.solana.rpcUrl);
+      const escrow = await readOnlyClient.getEscrowAccount(pubkey);
+      if (escrow) {
+        setHasEscrow(true);
       }
     }
   }, []);

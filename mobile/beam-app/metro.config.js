@@ -1,10 +1,15 @@
 const {getDefaultConfig, mergeConfig} = require('@react-native/metro-config');
 const path = require('path');
 
-// Get the workspace root (monorepo root)
-const workspaceRoot = path.resolve(__dirname, '../..');
 const projectRoot = __dirname;
+const workspaceRoot = path.resolve(projectRoot, '../..');
 
+/**
+ * Metro configuration
+ * https://reactnative.dev/docs/metro
+ *
+ * @type {import('metro-config').MetroConfig}
+ */
 const config = {
   watchFolders: [workspaceRoot],
   resolver: {
@@ -14,8 +19,13 @@ const config = {
     ],
     extraNodeModules: {
       '@beam/shared': path.resolve(workspaceRoot, 'mobile/shared'),
+      buffer: path.resolve(projectRoot, 'node_modules/@craftzdog/react-native-buffer'),
+      crypto: path.resolve(projectRoot, 'node_modules/crypto-browserify'),
+      process: path.resolve(projectRoot, 'node_modules/process/browser'),
+      stream: path.resolve(projectRoot, 'node_modules/stream-browserify'),
+      util: path.resolve(projectRoot, 'node_modules/util'),
+      vm: path.resolve(projectRoot, 'node_modules/vm-browserify'),
     },
-    unstable_enablePackageExports: true,
   },
   transformer: {
     getTransformOptions: async () => ({
@@ -27,4 +37,4 @@ const config = {
   },
 };
 
-module.exports = mergeConfig(getDefaultConfig(projectRoot), config);
+module.exports = mergeConfig(getDefaultConfig(__dirname), config);

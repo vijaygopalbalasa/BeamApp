@@ -4,8 +4,7 @@
   "private": true,
   "description": "Beam - Offline-first P2P payments on Solana with escrow",
   "workspaces": [
-    "mobile/merchant-app",
-    "mobile/customer-app",
+    "mobile/beam-app",
     "mobile/shared",
     "verifier",
     "program"

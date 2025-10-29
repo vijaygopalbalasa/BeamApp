@@ -6,13 +6,25 @@
 import { Keypair } from '@solana/web3.js';
 import { BeamProgramClient } from '../BeamProgram';
 import { Config } from '../../config';
+import type { BeamSigner } from '../../wallet/WalletManager';
+import * as ed from '@noble/ed25519';
 
 describe('BeamProgramClient', () => {
   let client: BeamProgramClient;
-  let wallet: Keypair;
+  let wallet: BeamSigner;
 
   beforeAll(() => {
-    wallet = Keypair.generate();
+    const keypair = Keypair.generate();
+
+    // Create a proper BeamSigner from the Keypair
+    wallet = {
+      publicKey: keypair.publicKey,
+      sign: async (message: Uint8Array): Promise<Uint8Array> => {
+        // Use ed25519 to sign the message
+        return ed.sign(message, keypair.secretKey.slice(0, 32));
+      },
+    };
+
     client = new BeamProgramClient(Config.solana.rpcUrl, wallet);
   });
 
@@ -20,6 +32,18 @@ describe('BeamProgramClient', () => {
     expect(client).toBeDefined();
     expect(client.getProgramId().toString()).toBe(Config.program.id);
     expect(client.getUsdcMint().toString()).toBe(Config.tokens.usdc.mint);
+  });
+
+  test('should support read-only mode without signer', () => {
+    const readOnlyClient = new BeamProgramClient(Config.solana.rpcUrl);
+    expect(readOnlyClient).toBeDefined();
+    expect(readOnlyClient.getProgramId().toString()).toBe(Config.program.id);
+    expect(readOnlyClient.getUsdcMint().toString()).toBe(Config.tokens.usdc.mint);
+  });
+
+  test('should throw error for write operations in read-only mode', async () => {
+    const readOnlyClient = new BeamProgramClient(Config.solana.rpcUrl);
+    await expect(readOnlyClient.initializeEscrow(1000000)).rejects.toThrow('Signer required for write operations');
   });
 
   test('should test connection to Devnet', async () => {

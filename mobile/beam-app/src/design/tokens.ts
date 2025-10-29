@@ -5,6 +5,7 @@ export const palette = {
   success: '#10B981',
   warning: '#F59E0B',
   danger: '#EF4444',
+  neutral: '#64748B',
   surface: '#0F172A',
   background: '#020617',
   card: '#111827',
@@ -12,7 +13,7 @@ export const palette = {
   border: '#1E293B',
   textPrimary: '#F8FAFC',
   textSecondary: '#CBD5F5',
-  textMuted: '#64748B',
+  textMuted: '#7E8B9F', // Improved from #64748B for better WCAG AA compliance (4.5:1 contrast)
   accentBlue: '#38BDF8',
   accentPurple: '#A855F7',
   accentGreen: '#22D3EE',
@@ -39,7 +40,24 @@ export const typography = {
   headingM: 20,
   body: 16,
   small: 14,
-  micro: 12,
+  micro: 13, // Improved from 12 for better readability (minimum recommended is 13px)
+};
+
+// Line heights for better readability
+export const lineHeights = {
+  headingXL: 40,
+  headingL: 32,
+  headingM: 28,
+  body: 24, // 1.5x line height
+  small: 20, // 1.43x line height
+  micro: 18, // 1.38x line height
+};
+
+// Minimum touch target size for accessibility (iOS/Android HIG)
+export const touchTargets = {
+  minimum: 44, // 44pt minimum for iOS, 48dp for Android (we use 44 as baseline)
+  recommended: 48,
+  comfortable: 56,
 };
 
 export const shadows = {

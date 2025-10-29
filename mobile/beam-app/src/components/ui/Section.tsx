@@ -4,7 +4,7 @@ import { spacing } from '../../design/tokens';
 import { HeadingM, Body } from './Typography';
 
 interface SectionProps {
-  title: string;
+  title?: string;
   description?: string;
   children: React.ReactNode;
   action?: React.ReactNode;
@@ -15,7 +15,7 @@ export function Section({ title, description, children, action }: SectionProps) 
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <View style={styles.headerContent}>
-          <HeadingM>{title}</HeadingM>
+          {title ? <HeadingM>{title}</HeadingM> : null}
           {description ? <Body style={styles.description}>{description}</Body> : null}
         </View>
         {action}

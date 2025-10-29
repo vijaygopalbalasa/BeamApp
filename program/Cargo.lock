@@ -302,6 +302,7 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "ed25519-dalek",
+ "sha2 0.10.9",
 ]
 
 [[package]]

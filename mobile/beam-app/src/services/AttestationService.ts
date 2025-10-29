@@ -1,4 +1,5 @@
 import { encodeEnvelope, hashEnvelope, type AttestationEnvelope, type OfflineBundle } from '@beam/shared';
+import { Config } from '../config';
 import {
   SecureStorage,
   fromBase64,
@@ -8,6 +9,10 @@ import {
   type StoredAttestation,
 } from '../native/SecureStorageBridge';
 import { encodeOfflineBundle, decodeOfflineBundle } from '../storage/BundleStorage';
+
+const MAX_ATTESTATION_RETRIES = 3;
+const INITIAL_RETRY_DELAY_MS = 1000;
+const MAX_RETRY_DELAY_MS = 10000;
 
 export interface AttestedBundle {
   bundle: OfflineBundle;
@@ -34,6 +39,7 @@ class AttestationService {
       merchantAttestation?: AttestationEnvelope;
       selfRole?: 'payer' | 'merchant';
       usePlayIntegrity?: boolean;
+      skipAttestationFetch?: boolean;
     } = {}
   ): Promise<AttestationEnvelope | undefined> {
     const payloadJson = JSON.stringify(encodeOfflineBundle(bundle));
@@ -42,26 +48,79 @@ class AttestationService {
     const initialMetadata = this.attachAttestations(metadata, options);
     await SecureStorage.storeTransaction(bundle.tx_id, encodedPayload, initialMetadata);
 
+    // If skipAttestationFetch is true, don't fetch new attestation
+    if (options.skipAttestationFetch) {
+      return undefined;
+    }
+
+    // Fetch attestation with retry logic
+    const attestationOptions = options.usePlayIntegrity !== undefined
+      ? { usePlayIntegrity: options.usePlayIntegrity, endpoint: Config.services?.verifier }
+      : { endpoint: Config.services?.verifier };
+
+    const envelope = await this.fetchAttestationWithRetry(bundle.tx_id, attestationOptions);
+
+    const mergedOptions = {
+      payerAttestation:
+        options.selfRole === 'payer' ? envelope : options.payerAttestation,
+      merchantAttestation:
+        options.selfRole === 'merchant' ? envelope : options.merchantAttestation,
+    };
+    const mergedMetadata = this.attachAttestations(metadata, mergedOptions);
+    await SecureStorage.storeTransaction(bundle.tx_id, encodedPayload, mergedMetadata);
+    return envelope;
+  }
+
+  /**
+   * Fetch attestation with exponential backoff retry
+   */
+  private async fetchAttestationWithRetry(
+    bundleId: string,
+    options?: { usePlayIntegrity?: boolean; endpoint?: string },
+    attemptNumber: number = 1
+  ): Promise<AttestationEnvelope> {
     try {
-      const attestationOptions = options.usePlayIntegrity !== undefined
-        ? { usePlayIntegrity: options.usePlayIntegrity }
-        : undefined;
-      const nativeEnvelope = await SecureStorage.fetchAttestation(bundle.tx_id, attestationOptions);
+      // Prefer passing endpoint down to native to avoid BuildConfig drift
+      const nativeEnvelope = await SecureStorage.fetchAttestation(bundleId, options as any);
       const envelope = this.parseNativeEnvelope(nativeEnvelope);
-      const mergedOptions = {
-        payerAttestation:
-          options.selfRole === 'payer' ? envelope : options.payerAttestation,
-        merchantAttestation:
-          options.selfRole === 'merchant' ? envelope : options.merchantAttestation,
-      };
-      const mergedMetadata = this.attachAttestations(metadata, mergedOptions);
-      await SecureStorage.storeTransaction(bundle.tx_id, encodedPayload, mergedMetadata);
+
+      // Validate envelope has required fields
+      if (!envelope.bundleId || !envelope.signature || envelope.signature.length === 0) {
+        throw new Error('Invalid attestation envelope: missing required fields');
+      }
+
       return envelope;
     } catch (err) {
-      if (__DEV__) {
-        console.warn('Attestation fetch failed, continuing without envelope', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      if (attemptNumber >= MAX_ATTESTATION_RETRIES) {
+        // Maximum retries reached - throw error to trigger rollback
+        if (__DEV__) {
+          console.error(`Attestation fetch failed after ${attemptNumber} attempts:`, errorMessage);
+        }
+        throw new Error(
+          `Attestation fetch failed after ${attemptNumber} attempts: ${errorMessage}`
+        );
       }
-      return undefined;
+
+      // Calculate exponential backoff delay
+      const delay = Math.min(
+        INITIAL_RETRY_DELAY_MS * Math.pow(2, attemptNumber - 1),
+        MAX_RETRY_DELAY_MS
+      );
+
+      if (__DEV__) {
+        console.warn(
+          `Attestation fetch attempt ${attemptNumber} failed, retrying in ${delay}ms:`,
+          errorMessage
+        );
+      }
+
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      // Retry
+      return this.fetchAttestationWithRetry(bundleId, options, attemptNumber + 1);
     }
   }
 
@@ -110,7 +169,7 @@ class AttestationService {
     const payload = fromBase64(item.payload);
     const persisted = JSON.parse(new TextDecoder().decode(payload));
     const bundle = decodeOfflineBundle(persisted);
-    const fallbackMetadata = {
+    const fallbackMetadata: BundleMetadata = {
       amount: bundle.token.amount,
       currency: bundle.token.symbol,
       merchantPubkey: bundle.merchant_pubkey,

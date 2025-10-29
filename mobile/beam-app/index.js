@@ -1,10 +1,5 @@
-// POLYFILLS MUST COME FIRST - DO NOT MOVE THESE IMPORTS
-import 'react-native-get-random-values';
-import 'react-native-url-polyfill/auto';
-import { Buffer } from 'buffer';
-
-// Set global Buffer
-global.Buffer = global.Buffer || Buffer;
+// Global Solana polyfills MUST be loaded first
+import './src/polyfills/solana';
 
 // React Native and App imports MUST come after polyfills
 import 'react-native-gesture-handler';

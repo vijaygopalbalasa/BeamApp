@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, StyleSheet, Alert, Linking, RefreshControl } from 'react-native';
+import { View, StyleSheet, Alert, Linking, RefreshControl, Modal } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { getAssociatedTokenAddress, getAccount } from '@solana/spl-token';
+import { PublicKey } from '@solana/web3.js';
 import { wallet } from '../wallet/WalletManager';
 import { faucetService } from '../services/FaucetService';
 import { solanaFaucetService } from '../services/SolanaFaucetService';
+import { connectionService } from '../services/ConnectionService';
 import { Config } from '../config';
 import { Screen } from '../components/ui/Screen';
 import { Hero } from '../components/ui/Hero';
@@ -14,68 +15,84 @@ import { Section } from '../components/ui/Section';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Metric } from '../components/ui/Metric';
+import { TransactionStatus, type TransactionStep } from '../components/ui/TransactionStatus';
 import { HeadingM, Body, Small, Micro } from '../components/ui/Typography';
 import { palette, radius, spacing } from '../design/tokens';
+
+const WALLET_FUNDED_KEY = '@beam:wallet_funded';
 
 interface FundingScreenProps {
   navigation: {
     navigate: (screen: string, params?: any) => void;
   };
-  route: {
-    params: {
-      role: 'customer' | 'merchant';
-    };
-  };
 }
 
-export function FundingScreen({ navigation, route }: FundingScreenProps) {
+export function FundingScreen({ navigation }: FundingScreenProps) {
   const [requestingSol, setRequestingSol] = useState(false);
   const [requestingUsdc, setRequestingUsdc] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingBalances, setLoadingBalances] = useState(false);
   const [solBalance, setSolBalance] = useState(0);
   const [usdcBalance, setUsdcBalance] = useState(0);
   const [walletAddress, setWalletAddress] = useState<string>('');
   const [usdcTokenAccount, setUsdcTokenAccount] = useState<string>('');
-  const { role } = route.params;
+  const [lastBalanceUpdate, setLastBalanceUpdate] = useState<Date | null>(null);
 
-  const connection = useMemo(
-    () => new Connection(Config.solana.rpcUrl, 'confirmed'),
-    []
-  );
+  // Transaction status tracking for better UX
+  const [showTransactionStatus, setShowTransactionStatus] = useState(false);
+  const [transactionStep, setTransactionStep] = useState<TransactionStep>('submitting');
+  const [transactionSignature, setTransactionSignature] = useState<string>('');
+  const [transactionError, setTransactionError] = useState<string>('');
 
-  const loadBalances = useCallback(async () => {
+  const loadBalances = useCallback(async (showLoading = true) => {
+    if (showLoading) {
+      setLoadingBalances(true);
+    }
+
     try {
       const pubkey = wallet.getPublicKey();
       if (!pubkey) {
         throw new Error('Wallet not loaded');
       }
 
+      if (__DEV__) {
+        console.log('[FundingScreen] Fetching balances for', pubkey.toBase58());
+      }
+
       setWalletAddress(pubkey.toBase58());
 
-      // Get SOL balance
-      const solLamports = await connection.getBalance(pubkey);
-      setSolBalance(solLamports / LAMPORTS_PER_SOL);
+      // Use reliable connection service with automatic fallbacks
+      const balances = await connectionService.getAllBalances(pubkey);
 
-      // Get USDC token account address
-      const usdcMint = new PublicKey(Config.tokens.usdc.mint);
-      const tokenAccount = await getAssociatedTokenAddress(usdcMint, pubkey);
-      setUsdcTokenAccount(tokenAccount.toBase58());
+      setSolBalance(balances.solBalance);
+      setUsdcBalance(balances.usdcBalance);
+      setUsdcTokenAccount(balances.tokenAccount);
 
-      // Try to get USDC balance
-      try {
-        const account = await getAccount(connection, tokenAccount);
-        const balance = Number(account.amount) / Math.pow(10, Config.tokens.usdc.decimals);
-        setUsdcBalance(balance);
-      } catch (err) {
-        // Token account doesn't exist yet
-        setUsdcBalance(0);
+      // Update last refresh timestamp
+      setLastBalanceUpdate(new Date());
+
+      if (__DEV__) {
+        console.log('[FundingScreen] Balances updated:', {
+          SOL: balances.solBalance,
+          USDC: balances.usdcBalance,
+          timestamp: new Date().toISOString(),
+        });
       }
     } catch (err) {
       if (__DEV__) {
-        console.error('Failed to load balances:', err);
+        console.error('[FundingScreen] Failed to load balances:', err);
+      }
+      Alert.alert(
+        'Balance Update Failed',
+        'Could not fetch current balances. Please check your network connection and try again.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      if (showLoading) {
+        setLoadingBalances(false);
       }
     }
-  }, [connection]);
+  }, []);
 
   useEffect(() => {
     void loadBalances();
@@ -83,8 +100,11 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadBalances();
-    setRefreshing(false);
+    try {
+      await loadBalances(false);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleRequestSOL = async () => {
@@ -95,29 +115,57 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
     }
 
     setRequestingSol(true);
+    let airdropSuccessful = false;
+
     try {
+      // Show transaction status modal - submitting
+      setTransactionStep('submitting');
+      setTransactionSignature('');
+      setTransactionError('');
+      setShowTransactionStatus(true);
+
       // Use the faucet service which has fallback RPC endpoints
       const result = await solanaFaucetService.requestSolAirdrop(pubkey, 0.5);
+      airdropSuccessful = true;
 
-      const sourceInfo = result.source === 'fallback-rpc'
-        ? '\n\n(Using alternate RPC endpoint)'
-        : '';
+      // Update transaction status - submitted
+      setTransactionStep('submitted');
+      setTransactionSignature(result.signature);
 
-      Alert.alert(
-        'Airdrop Requested',
-        `Requesting ${result.amount} SOL from devnet faucet...${sourceInfo}\n\nTransaction: ${result.signature}\n\nRefresh in a few seconds to see updated balance.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              // Wait a bit then refresh
-              setTimeout(() => {
-                void loadBalances();
-              }, 3000);
-            },
-          },
-        ]
-      );
+      // Wait a moment then show confirming state
+      setTimeout(() => {
+        setTransactionStep('confirming');
+      }, 1000);
+
+      // Auto-refresh balance multiple times to catch the update
+      // Match devnet confirmation times (15-30 seconds typical)
+      const checkConfirmation = async () => {
+        // First refresh after 5 seconds
+        setTimeout(async () => {
+          await loadBalances(false);
+        }, 5000);
+
+        // Second refresh after 15 seconds (typical devnet confirmation)
+        setTimeout(async () => {
+          await loadBalances(false);
+          setTransactionStep('confirmed');
+          setTimeout(() => {
+            setTransactionStep('finalizing');
+          }, 1000);
+        }, 15000);
+
+        // Third refresh after 30 seconds (fallback for slow RPC)
+        setTimeout(async () => {
+          await loadBalances(false);
+          setTransactionStep('finalized');
+          // Auto-close modal after 3 seconds on success
+          setTimeout(() => {
+            setShowTransactionStatus(false);
+          }, 3000);
+        }, 30000);
+      };
+
+      void checkConfirmation();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       const message = error.message;
@@ -128,30 +176,52 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
 
       if (solanaFaucetService.isInternalError(error)) {
         errorTitle = 'Faucet Temporarily Unavailable';
-        errorMessage = `The Solana devnet faucet is experiencing high traffic or internal errors.\n\nPlease try one of these alternatives:\n\n1. Use web faucet: faucet.solana.com\n2. Try QuickNode faucet\n3. Wait a few minutes and try again`;
+        errorMessage = `The Solana devnet faucet is experiencing high traffic or internal errors.\n\nPlease try one of these alternatives:\n\n1. Use web faucet: faucet.solana.com\n2. Try QuickNode faucet\n3. Wait a few minutes and try again\n\nCurrent balance will be refreshed.`;
       } else if (solanaFaucetService.isRateLimitError(error)) {
         errorTitle = 'Rate Limit Reached';
-        errorMessage = `You've reached the airdrop rate limit (2 SOL/hour, 24 SOL/day).\n\nPlease:\n1. Wait 1 hour and try again\n2. Use web faucet: faucet.solana.com\n3. Try a different network connection`;
+        errorMessage = `You've reached the airdrop rate limit (2 SOL/hour, 24 SOL/day).\n\nPlease:\n1. Wait 1 hour and try again\n2. Use web faucet: faucet.solana.com\n3. Try a different network connection\n\nYour current balance will be refreshed.`;
       }
 
-      Alert.alert(
-        errorTitle,
-        errorMessage,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Open Web Faucet',
-            onPress: () => {
-              const faucetUrl = `https://faucet.solana.com/?address=${walletAddress}`;
-              Linking.openURL(faucetUrl).catch(openErr => {
-                Alert.alert('Error', `Failed to open faucet: ${openErr instanceof Error ? openErr.message : String(openErr)}`);
-              });
+      // Show error in transaction status modal
+      setTransactionStep('failed');
+      setTransactionError(errorMessage);
+
+      // Alert after a moment to give user time to see the error state
+      setTimeout(() => {
+        Alert.alert(
+          errorTitle,
+          errorMessage,
+          [
+            {
+              text: 'Cancel',
+              style: 'cancel',
+              onPress: () => {
+                setShowTransactionStatus(false);
+                // Refresh on cancel to show current state
+                void loadBalances(false);
+              }
             },
-          },
-        ]
-      );
+            {
+              text: 'Open Web Faucet',
+              onPress: () => {
+                setShowTransactionStatus(false);
+                const faucetUrl = `https://faucet.solana.com/?address=${walletAddress}`;
+                Linking.openURL(faucetUrl).catch(openErr => {
+                  Alert.alert('Error', `Failed to open faucet: ${openErr instanceof Error ? openErr.message : String(openErr)}`);
+                });
+                // Refresh balance after opening web faucet
+                void loadBalances(false);
+              },
+            },
+          ]
+        );
+      }, 2000);
     } finally {
       setRequestingSol(false);
+      // Always refresh balance after airdrop attempt (success or failure)
+      if (!airdropSuccessful) {
+        void loadBalances(false);
+      }
     }
   };
 
@@ -162,65 +232,88 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
       return;
     }
 
-    const faucetUrl = `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}`;
-    const circleFaucetUrl = 'https://faucet.circle.com/';
-
     setRequestingUsdc(true);
+
     try {
       const result = await faucetService.requestUsdc(pubkey.toBase58());
+      const explorerUrl =
+        result.explorerUrl ??
+        `https://explorer.solana.com/tx/${result.signature}?cluster=${Config.solana.network}`;
 
-      // Show success with options to use web faucet
+      const successMessage =
+        result.message ??
+        [
+          `Minted ${result.amount} USDC to your wallet.`,
+          `Token account:\n${result.tokenAccount}`,
+          `Transaction:\n${result.signature}`,
+        ].join('\n\n');
+
       Alert.alert(
-        'USDC Token Account Ready',
-        result.message || 'Your USDC token account has been created.',
+        'USDC Minted',
+        successMessage,
         [
           {
-            text: 'OK',
+            text: 'View on Explorer',
             onPress: () => {
-              // Reload balances after a delay to check for tokens
-              setTimeout(() => {
-                void loadBalances();
-              }, 3000);
-            },
-          },
-          {
-            text: 'Open Web Faucet',
-            onPress: () => {
-              Linking.openURL(faucetUrl).catch(openErr => {
-                Alert.alert('Error', `Failed to open faucet: ${openErr.message}`);
+              Linking.openURL(explorerUrl).catch(openErr => {
+                Alert.alert('Error', `Failed to open explorer: ${openErr.message}`);
               });
             },
           },
+          {
+            text: 'OK',
+            onPress: () => void loadBalances(false),
+          },
         ]
       );
+
+      // Auto-refresh balance to show minted tokens
+      setTimeout(() => void loadBalances(false), 3000);
+      setTimeout(() => void loadBalances(false), 8000);
+      setTimeout(() => void loadBalances(false), 15000);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
       Alert.alert(
         'USDC Request',
-        message,
+        `${message}\n\nPlease use one of the web faucets to get USDC tokens.\n\nYour balance will be refreshed.`,
         [
-          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+            onPress: () => {
+              // Refresh on cancel to show current state
+              void loadBalances(false);
+            }
+          },
           {
             text: 'Open SPL Faucet',
             onPress: () => {
+              const faucetUrl = `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}`;
               Linking.openURL(faucetUrl).catch(openErr => {
                 Alert.alert('Error', `Failed to open faucet: ${openErr.message}`);
               });
+              // Refresh balance after opening web faucet
+              void loadBalances(false);
             },
           },
           {
             text: 'Open Circle Faucet',
             onPress: () => {
+              const circleFaucetUrl = 'https://faucet.circle.com/';
               Linking.openURL(circleFaucetUrl).catch(openErr => {
                 Alert.alert('Error', `Failed to open Circle faucet: ${openErr.message}`);
               });
+              // Refresh balance after opening web faucet
+              void loadBalances(false);
             },
           },
         ]
       );
     } finally {
       setRequestingUsdc(false);
+      // Always refresh balance after request attempt (success or failure)
+      void loadBalances(false);
     }
   };
 
@@ -229,7 +322,7 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
     Alert.alert('Copied', 'Wallet address copied to clipboard');
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (solBalance === 0) {
       Alert.alert(
         'No SOL Balance',
@@ -238,27 +331,20 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
       return;
     }
 
-    if (role === 'customer' && usdcBalance === 0) {
-      Alert.alert(
-        'No USDC Balance',
-        'You need USDC to create an escrow. Please request USDC from the faucet first.',
-        [
-          { text: 'Get USDC', onPress: handleRequestUSDC },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
-      return;
+    // Mark wallet as funded and navigate to Home screen
+    try {
+      await AsyncStorage.setItem(WALLET_FUNDED_KEY, 'true');
+      navigation.navigate('Home');
+    } catch (err) {
+      if (__DEV__) {
+        console.error('[FundingScreen] Failed to save funded state:', err);
+      }
+      // Still navigate even if storage fails
+      navigation.navigate('Home');
     }
-
-    if (role === 'merchant') {
-      navigation.navigate('MerchantDashboard');
-      return;
-    }
-
-    navigation.navigate('EscrowSetup', { role });
   };
 
-  const hasSufficientFunds = solBalance > 0 && (role === 'merchant' || usdcBalance > 0);
+  const hasSufficientFunds = solBalance > 0;
 
   return (
     <Screen
@@ -275,17 +361,13 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
             />
           }
           title="Fund your wallet"
-          subtitle={
-            role === 'customer'
-              ? 'Request devnet SOL for fees and USDC for escrow funding'
-              : 'Request devnet SOL for transaction fees'
-          }
+          subtitle="Request devnet SOL for transaction fees and optionally USDC for payments"
         />
       }
     >
       <Section
         title="Current balances"
-        description="Pull down to refresh balances from devnet"
+        description="Balances are updated automatically after airdrop requests"
       >
         <Card style={styles.metricsCard}>
           <View style={styles.metricsRow}>
@@ -298,10 +380,28 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
             <Metric
               label="USDC"
               value={usdcBalance.toFixed(2)}
-              caption={role === 'customer' ? 'For escrow funding' : 'Received payments'}
+              caption="For payments"
               accent="blue"
             />
           </View>
+          {lastBalanceUpdate && (
+            <Small style={styles.lastUpdateText}>
+              Last updated: {lastBalanceUpdate.toLocaleTimeString()}
+            </Small>
+          )}
+          {loadingBalances && (
+            <Small style={styles.loadingText}>
+              Fetching latest balances...
+            </Small>
+          )}
+          <Button
+            label={refreshing ? 'Refreshing...' : 'Refresh balances'}
+            variant="ghost"
+            onPress={handleRefresh}
+            loading={refreshing}
+            disabled={refreshing || loadingBalances}
+            style={styles.refreshButton}
+          />
         </Card>
       </Section>
 
@@ -351,31 +451,29 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
         </Card>
       </Section>
 
-      {role === 'customer' && (
-        <Section
-          title="Get USDC"
-          description="Request USDC tokens directly from the network faucet"
-        >
-          <Card style={styles.faucetCard}>
-            <View style={styles.faucetContent}>
-              <HeadingM>💵 Request USDC</HeadingM>
-              <Body style={styles.faucetDescription}>
-                Beam contacts the SPL Token Faucet API on your behalf. If the automated request fails, you can still open the faucet manually.
-              </Body>
-              <Small style={styles.faucetMint}>
-                USDC Mint: {Config.tokens.usdc.mint}
-              </Small>
-              <Button
-                label={requestingUsdc ? 'Requesting...' : 'Request USDC airdrop'}
-                variant="secondary"
-                onPress={handleRequestUSDC}
-                loading={requestingUsdc}
-                disabled={requestingUsdc}
-              />
-            </View>
-          </Card>
-        </Section>
-      )}
+      <Section
+        title="Get USDC (Optional)"
+        description="Request USDC tokens for making payments"
+      >
+        <Card style={styles.faucetCard}>
+          <View style={styles.faucetContent}>
+            <HeadingM>💵 Request USDC</HeadingM>
+            <Body style={styles.faucetDescription}>
+              Beam contacts the SPL Token Faucet API on your behalf. If the automated request fails, you can still open the faucet manually.
+            </Body>
+            <Small style={styles.faucetMint}>
+              USDC Mint: {Config.tokens.usdc.mint}
+            </Small>
+            <Button
+              label={requestingUsdc ? 'Requesting...' : 'Request USDC airdrop'}
+              variant="secondary"
+              onPress={handleRequestUSDC}
+              loading={requestingUsdc}
+              disabled={requestingUsdc}
+            />
+          </View>
+        </Card>
+      </Section>
 
       <Section
         title="Alternative: Manual funding"
@@ -396,7 +494,7 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
       {hasSufficientFunds && (
         <Section>
           <Button
-            label={role === 'customer' ? 'Continue to escrow setup' : 'Continue to dashboard'}
+            label="Continue to Home"
             onPress={handleContinue}
           />
         </Section>
@@ -406,18 +504,52 @@ export function FundingScreen({ navigation, route }: FundingScreenProps) {
         <Section>
           <Card variant="highlight">
             <Body>
-              ⚠️ {role === 'customer'
-                ? 'You need both SOL and USDC to continue'
-                : 'You need SOL to continue'}
+              ⚠️ You need SOL to continue
             </Body>
             <Small style={styles.helper}>
-              {role === 'customer'
-                ? 'Request SOL above, then get USDC from the SPL Token Faucet'
-                : 'Request SOL from the airdrop above'}
+              Request SOL from the airdrop above to enable transactions
             </Small>
           </Card>
         </Section>
       )}
+
+      {/* Transaction Status Modal - NEW UX IMPROVEMENT */}
+      <Modal
+        visible={showTransactionStatus}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (transactionStep === 'finalized' || transactionStep === 'failed') {
+            setShowTransactionStatus(false);
+          }
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <TransactionStatus
+              step={transactionStep}
+              signature={transactionSignature}
+              network={Config.solana.network as 'mainnet' | 'devnet' | 'testnet'}
+              estimatedTimeSeconds={30}
+              error={transactionError}
+              title={transactionStep === 'confirming' ? 'Confirming Transaction' : undefined}
+              description={
+                transactionStep === 'confirming'
+                  ? 'Your balance will update automatically once confirmed. This typically takes 15-30 seconds on devnet.'
+                  : undefined
+              }
+            />
+            {(transactionStep === 'finalized' || transactionStep === 'failed') && (
+              <Button
+                label="Close"
+                variant="ghost"
+                onPress={() => setShowTransactionStatus(false)}
+                style={styles.closeButton}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -429,6 +561,22 @@ const styles = StyleSheet.create({
   metricsRow: {
     flexDirection: 'row',
     gap: spacing.md,
+  },
+  lastUpdateText: {
+    color: 'rgba(148,163,184,0.7)',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+  },
+  loadingText: {
+    color: palette.accentBlue,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+    fontStyle: 'italic',
+  },
+  refreshButton: {
+    marginTop: spacing.xs,
   },
   address: {
     fontFamily: 'Menlo',
@@ -468,5 +616,21 @@ const styles = StyleSheet.create({
   helper: {
     color: 'rgba(148,163,184,0.82)',
     lineHeight: 18,
+  },
+  // NEW: Modal styles for TransactionStatus
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.xl,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 480,
+    gap: spacing.md,
+  },
+  closeButton: {
+    width: '100%',
   },
 });

@@ -71,9 +71,19 @@ class SolanaFaucetService {
 
     const connectionConfig = {
       commitment: 'confirmed' as const,
-      confirmTransactionInitialTimeout: 90000, // 90 seconds
+      confirmTransactionInitialTimeout: 60000, // 60 seconds
       disableRetryOnRateLimit: false,
       httpHeaders: { 'Content-Type': 'application/json' },
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+        // Add timeout to fetch requests
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout for HTTP requests
+
+        return fetch(input, {
+          ...init,
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId));
+      },
     };
 
     // Try primary RPC first

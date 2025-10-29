@@ -12,6 +12,9 @@ import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { Body, Small, Micro } from '../components/ui/Typography';
 import { palette, radius, spacing } from '../design/tokens';
+import { PaymentSheet } from '../components/features/PaymentSheet';
+import { connectionService } from '../services/ConnectionService';
+import { InfoButton } from '../components/ui/InfoButton';
 
 const ONBOARDING_COMPLETE_KEY = '@beam:onboarding_complete';
 
@@ -24,6 +27,12 @@ interface EscrowSetupScreenProps {
 export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
   const [loading, setLoading] = useState(false);
   const [initialAmount, setInitialAmount] = useState('100');
+  const [showSheet, setShowSheet] = useState(false);
+  const [walletUsdc, setWalletUsdc] = useState<number | null>(null);
+  const [escrowUsdc, setEscrowUsdc] = useState<number | null>(null);
+  const [sheetStage, setSheetStage] = useState<'review' | 'submitting' | 'confirming' | 'done' | 'error'>('review');
+  const [sheetProgress, setSheetProgress] = useState(0);
+  const onConfirmRef = React.useRef<null | (() => void)>(null);
 
   const createEscrow = async () => {
     try {
@@ -47,39 +56,49 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
       const client = new BeamProgramClient(Config.solana.rpcUrl, signer);
       const amountLamports = Math.floor(amount * 1_000_000);
 
-      Alert.alert(
-        'Create Escrow',
-        `Create escrow with ${amount.toFixed(2)} USDC?\n\nThis will:\n• Create escrow account\n• Transfer ${amount.toFixed(2)} USDC to escrow\n• Require SOL for fees\n\nContinue?`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Create',
-            onPress: async () => {
-              setLoading(true);
-              try {
-                const tx = await client.initializeEscrow(amountLamports);
-                await AsyncStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
-
-                Alert.alert(
-                  'Escrow Created',
-                  `Transaction: ${tx}\n\nYou can now make offline payments!`,
-                  [{ text: 'Continue', onPress: () => navigation.navigate('CustomerDashboard') }]
-                );
-              } catch (err) {
-                const message = err instanceof Error ? err.message : String(err);
-                Alert.alert('Error', `Failed to create escrow:\n${message}`);
-              } finally {
-                setLoading(false);
-              }
-            },
-          },
-        ]
-      );
+      setShowSheet(true);
+      const doCreate = async () => {
+        setSheetStage('submitting');
+        setSheetProgress(0.25);
+        try {
+          setLoading(true);
+          const tx = await client.initializeEscrow(amountLamports);
+          setSheetStage('confirming');
+          setSheetProgress(0.75);
+          await AsyncStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
+          setSheetStage('done');
+          setSheetProgress(1);
+          Alert.alert('Escrow Created', `Transaction: ${tx}`);
+          setShowSheet(false);
+          navigation.navigate('CustomerDashboard');
+        } catch (err) {
+          setSheetStage('error');
+          const message = err instanceof Error ? err.message : String(err);
+          Alert.alert('Error', `Failed to create escrow:\n${message}`);
+        } finally {
+          setLoading(false);
+        }
+      };
+      // Attach callback to confirm button
+      onConfirmRef.current = doCreate;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       Alert.alert('Error', message);
     }
   };
+
+  // Preload balances for preview
+  React.useEffect(() => {
+    (async () => {
+      const pk = await wallet.loadWallet();
+      if (!pk) return;
+      const bal = await connectionService.getUsdcBalance(pk);
+      setWalletUsdc(bal.balance);
+      const client = new BeamProgramClient(Config.solana.rpcUrl);
+      const escrow = await client.getEscrowAccount(pk);
+      setEscrowUsdc(escrow ? escrow.escrowBalance / 1_000_000 : 0);
+    })();
+  }, []);
 
   return (
     <Screen
@@ -108,7 +127,10 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
 
       <Section title="Initial escrow amount">
         <Card>
-          <Micro>USDC AMOUNT</Micro>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Micro>USDC AMOUNT</Micro>
+            <InfoButton title="What is escrow?" message="Escrow safely holds your USDC for offline payments. You can withdraw anytime." />
+          </View>
           <TextInput
             style={styles.input}
             value={initialAmount}
@@ -120,6 +142,12 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
           <Small style={styles.helper}>
             Recommended: Start with 100 USDC for initial funding
           </Small>
+          <View style={{ flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm }}>
+            {['25', '50', '100', '250'].map(v => (
+              <Button key={v} label={v} variant="secondary" onPress={() => setInitialAmount(v)} />
+            ))}
+            <Button label="Max" variant="secondary" onPress={() => walletUsdc != null ? setInitialAmount(String(Math.floor(walletUsdc))) : null} />
+          </View>
           <Button
             label={loading ? 'Creating...' : 'Create escrow'}
             onPress={createEscrow}
@@ -138,6 +166,20 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
           </Card>
         </View>
       )}
+
+      {/* Removed numeric keypad overlay; relying on system keyboard */}
+
+      {/* Payment sheet */}
+      <PaymentSheet
+        visible={showSheet}
+        title="Create Escrow"
+        subtitle={walletUsdc != null && escrowUsdc != null ? `Wallet ${walletUsdc.toFixed(2)} USDC → Escrow ${escrowUsdc.toFixed(2)} USDC` : 'Confirm escrow creation'}
+        amountLabel={`${parseFloat(initialAmount || '0').toFixed(2)} USDC`}
+        onCancel={() => setShowSheet(false)}
+        onConfirm={() => onConfirmRef.current && onConfirmRef.current()}
+        stage={sheetStage}
+        progress={sheetProgress}
+      />
     </Screen>
   );
 }
@@ -177,4 +219,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
   },
+  
 });

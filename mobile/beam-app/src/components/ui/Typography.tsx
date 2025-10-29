@@ -1,18 +1,18 @@
 import React from 'react';
 import { Text, TextProps, StyleSheet } from 'react-native';
 import { palette, typography } from '../../design/tokens';
+import { useUiPrefs } from '../../ui/UiPreferencesContext';
 
 interface TypographyProps extends TextProps {
   children: React.ReactNode;
 }
 
-function createTextComponent(style: object) {
+function createTextComponent(style: any) {
   return function Component({ style: styleOverride, children, ...rest }: TypographyProps) {
-    return (
-      <Text style={[styles.baseText, style, styleOverride]} {...rest}>
-        {children}
-      </Text>
-    );
+    const { fontScale } = useUiPrefs();
+    const scaled = Array.isArray(style) ? style : [style];
+    const scaledStyle = scaled.map(s => (s && s.fontSize ? { ...s, fontSize: s.fontSize * fontScale } : s));
+    return <Text style={[styles.baseText, ...scaledStyle, styleOverride]} {...rest}>{children}</Text>;
   };
 }
 

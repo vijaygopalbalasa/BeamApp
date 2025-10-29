@@ -5,7 +5,7 @@ import {
   VERIFIER_EXPECT_PACKAGE,
   VERIFIER_ALLOWED_DIGEST,
   VERIFIER_ALLOW_DEV,
-} from '../env';
+} from '../env.js';
 
 const CERT_PEM_PATH = process.env.VERIFIER_CERT_PEM_PATH;
 const CERT_PEM_INLINE = process.env.VERIFIER_CERT_PEM;

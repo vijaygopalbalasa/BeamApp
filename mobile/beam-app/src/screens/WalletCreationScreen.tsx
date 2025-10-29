@@ -11,7 +11,6 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { HeadingM, Body, Small, Micro } from '../components/ui/Typography';
 import { palette, radius, spacing } from '../design/tokens';
 
-const ONBOARDING_ROLE_KEY = '@beam:onboarding_role';
 const WALLET_CREATED_KEY = '@beam:wallet_created';
 
 interface WalletCreationScreenProps {
@@ -19,17 +18,11 @@ interface WalletCreationScreenProps {
     navigate: (screen: string, params?: any) => void;
     goBack: () => void;
   };
-  route: {
-    params: {
-      role: 'customer' | 'merchant';
-    };
-  };
 }
 
-export function WalletCreationScreen({ navigation, route }: WalletCreationScreenProps) {
+export function WalletCreationScreen({ navigation }: WalletCreationScreenProps) {
   const [loading, setLoading] = useState(false);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const { role } = route.params;
 
   const handleCreateWallet = async () => {
     setLoading(true);
@@ -39,11 +32,8 @@ export function WalletCreationScreen({ navigation, route }: WalletCreationScreen
       const address = pubkey.toBase58();
       setWalletAddress(address);
 
-      // Persist role and wallet creation state
-      await AsyncStorage.multiSet([
-        [ONBOARDING_ROLE_KEY, role],
-        [WALLET_CREATED_KEY, 'true'],
-      ]);
+      // Persist wallet creation state
+      await AsyncStorage.setItem(WALLET_CREATED_KEY, 'true');
 
       Alert.alert(
         'Wallet Created',
@@ -64,7 +54,7 @@ export function WalletCreationScreen({ navigation, route }: WalletCreationScreen
   };
 
   const handleContinue = () => {
-    navigation.navigate('Funding', { role });
+    navigation.navigate('WalletBackup');
   };
 
   if (loading) {
@@ -146,12 +136,8 @@ export function WalletCreationScreen({ navigation, route }: WalletCreationScreen
       header={
         <Hero
           chip={<StatusBadge status="pending" label="Ready to start" icon="🚀" />}
-          title={role === 'customer' ? 'Create your wallet' : 'Create merchant wallet'}
-          subtitle={
-            role === 'customer'
-              ? 'Generate a secure Solana wallet to start making offline payments'
-              : 'Generate a secure Solana wallet to accept payments from customers'
-          }
+          title="Create your wallet"
+          subtitle="Generate a secure Solana wallet for both sending and receiving payments"
         />
       }
     >

@@ -11,6 +11,7 @@ interface SignOptions {
 
 interface AttestationOptions {
   usePlayIntegrity?: boolean;
+  endpoint?: string; // Optional override for verifier endpoint
 }
 
 export interface BundleMetadata {
@@ -53,6 +54,8 @@ export interface SecureStorageModule {
   clearAll(): Promise<void>;
   fetchAttestation(bundleId: string, options?: AttestationOptions): Promise<AttestationEnvelope>;
   resetWallet(): Promise<void>;
+  exportWallet(passphrase: string): Promise<string>;
+  importWallet(passphrase: string, backup: string): Promise<string>;
 }
 
 const NativeBridge: SecureStorageModule | undefined = (NativeModules as unknown as {
@@ -89,6 +92,14 @@ class UnimplementedSecureStorage implements SecureStorageModule {
   }
 
   async resetWallet(): Promise<void> {
+    throw new Error('Secure storage bridge not implemented');
+  }
+
+  async exportWallet(): Promise<string> {
+    throw new Error('Secure storage bridge not implemented');
+  }
+
+  async importWallet(): Promise<string> {
     throw new Error('Secure storage bridge not implemented');
   }
 }
