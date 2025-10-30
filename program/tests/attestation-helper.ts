@@ -4,8 +4,14 @@ import * as crypto from "crypto";
 import * as ed25519 from "@noble/ed25519";
 
 // Test verifier keypair - matches the public key in attestation.rs
-const TEST_VERIFIER_PRIVATE_KEY = Uint8Array.from([68, 47, 157, 65, 96, 123, 192, 144, 45, 197, 182, 228, 89, 69, 251, 14, 34, 164, 241, 176, 249, 44, 209, 176, 9, 225, 121, 230, 54, 219, 135, 249]);
-const TEST_VERIFIER_PUBLIC_KEY = Uint8Array.from([136, 45, 85, 209, 177, 250, 101, 107, 193, 219, 164, 39, 89, 87, 49, 133, 149, 126, 150, 141, 151, 47, 160, 235, 163, 194, 185, 187, 47, 202, 18, 74]);
+const TEST_VERIFIER_PRIVATE_KEY = Uint8Array.from([
+  68, 47, 157, 65, 96, 123, 192, 144, 45, 197, 182, 228, 89, 69, 251, 14, 34,
+  164, 241, 176, 249, 44, 209, 176, 9, 225, 121, 230, 54, 219, 135, 249,
+]);
+const TEST_VERIFIER_PUBLIC_KEY = Uint8Array.from([
+  136, 45, 85, 209, 177, 250, 101, 107, 193, 219, 164, 39, 89, 87, 49, 133, 149,
+  126, 150, 141, 151, 47, 160, 235, 163, 194, 185, 187, 47, 202, 18, 74,
+]);
 
 export enum AttestationRole {
   Payer = 0,
@@ -31,13 +37,17 @@ export function computeAttestationRoot(
   attestationNonce: Uint8Array,
   attestationTimestamp: number | anchor.BN
 ): Uint8Array {
-  const amountBN = typeof amount === 'number' ? new anchor.BN(amount) : amount;
-  const nonceBN = typeof bundleNonce === 'number' ? new anchor.BN(bundleNonce) : bundleNonce;
-  const timestampBN = typeof attestationTimestamp === 'number' ? new anchor.BN(attestationTimestamp) : attestationTimestamp;
+  const amountBN = typeof amount === "number" ? new anchor.BN(amount) : amount;
+  const nonceBN =
+    typeof bundleNonce === "number" ? new anchor.BN(bundleNonce) : bundleNonce;
+  const timestampBN =
+    typeof attestationTimestamp === "number"
+      ? new anchor.BN(attestationTimestamp)
+      : attestationTimestamp;
 
-  const amountBytes = amountBN.toArrayLike(Buffer, 'le', 8);
-  const nonceBytes = nonceBN.toArrayLike(Buffer, 'le', 8);
-  const timestampBytes = timestampBN.toArrayLike(Buffer, 'le', 8);
+  const amountBytes = amountBN.toArrayLike(Buffer, "le", 8);
+  const nonceBytes = nonceBN.toArrayLike(Buffer, "le", 8);
+  const timestampBytes = timestampBN.toArrayLike(Buffer, "le", 8);
   const roleBytes = Buffer.from([role]);
 
   // Concatenate all components for hashing (matching Solana's hashv)
@@ -54,7 +64,7 @@ export function computeAttestationRoot(
   ]);
 
   // Use SHA256 to match Solana's hashv behavior
-  return crypto.createHash('sha256').update(components).digest();
+  return crypto.createHash("sha256").update(components).digest();
 }
 
 export async function createAttestationProof(

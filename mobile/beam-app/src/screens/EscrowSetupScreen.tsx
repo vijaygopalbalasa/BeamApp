@@ -30,6 +30,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
   const [showSheet, setShowSheet] = useState(false);
   const [walletUsdc, setWalletUsdc] = useState<number | null>(null);
   const [escrowUsdc, setEscrowUsdc] = useState<number | null>(null);
+  const [escrowExists, setEscrowExists] = useState(false);
   const [sheetStage, setSheetStage] = useState<'review' | 'submitting' | 'confirming' | 'done' | 'error'>('review');
   const [sheetProgress, setSheetProgress] = useState(0);
   const onConfirmRef = React.useRef<null | (() => void)>(null);
@@ -62,19 +63,38 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
         setSheetProgress(0.25);
         try {
           setLoading(true);
-          const tx = await client.initializeEscrow(amountLamports);
-          setSheetStage('confirming');
-          setSheetProgress(0.75);
-          await AsyncStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
-          setSheetStage('done');
-          setSheetProgress(1);
-          Alert.alert('Escrow Created', `Transaction: ${tx}`);
+
+          // Check if escrow already exists
+          const escrowAccount = await client.getEscrowAccount(signer.publicKey);
+
+          let tx;
+          if (escrowAccount) {
+            // FUND existing escrow
+            console.log('[EscrowSetup] Escrow exists, funding with', amount, 'USDC');
+            tx = await client.fundEscrow(amountLamports);
+            setSheetStage('confirming');
+            setSheetProgress(0.75);
+            setSheetStage('done');
+            setSheetProgress(1);
+            Alert.alert('Escrow Funded', `Added ${amount} USDC to escrow\n\nTransaction: ${tx.slice(0, 20)}...`);
+          } else {
+            // CREATE new escrow
+            console.log('[EscrowSetup] Creating new escrow with', amount, 'USDC');
+            tx = await client.initializeEscrow(amountLamports);
+            setSheetStage('confirming');
+            setSheetProgress(0.75);
+            await AsyncStorage.setItem(ONBOARDING_COMPLETE_KEY, 'true');
+            setSheetStage('done');
+            setSheetProgress(1);
+            Alert.alert('Escrow Created', `Created escrow with ${amount} USDC\n\nTransaction: ${tx.slice(0, 20)}...`);
+          }
+
           setShowSheet(false);
           navigation.navigate('CustomerDashboard');
         } catch (err) {
           setSheetStage('error');
           const message = err instanceof Error ? err.message : String(err);
-          Alert.alert('Error', `Failed to create escrow:\n${message}`);
+          Alert.alert('Error', `Failed to ${escrowAccount ? 'fund' : 'create'} escrow:\n${message}`);
         } finally {
           setLoading(false);
         }
@@ -97,6 +117,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
       const client = new BeamProgramClient(Config.solana.rpcUrl);
       const escrow = await client.getEscrowAccount(pk);
       setEscrowUsdc(escrow ? escrow.escrowBalance / 1_000_000 : 0);
+      setEscrowExists(!!escrow);
     })();
   }, []);
 
@@ -125,7 +146,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
         </Card>
       </Section>
 
-      <Section title="Initial escrow amount">
+      <Section title={escrowExists ? "Add funds to escrow" : "Initial escrow amount"}>
         <Card>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Micro>USDC AMOUNT</Micro>
@@ -162,7 +183,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
         <View style={styles.loadingOverlay}>
           <Card variant="glass" padding="lg" style={styles.loadingCard}>
             <ActivityIndicator size="large" color={palette.accentBlue} />
-            <Body>Creating escrow account...</Body>
+            <Body>{escrowExists ? 'Funding escrow...' : 'Creating escrow account...'}</Body>
           </Card>
         </View>
       )}
@@ -172,8 +193,8 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
       {/* Payment sheet */}
       <PaymentSheet
         visible={showSheet}
-        title="Create Escrow"
-        subtitle={walletUsdc != null && escrowUsdc != null ? `Wallet ${walletUsdc.toFixed(2)} USDC → Escrow ${escrowUsdc.toFixed(2)} USDC` : 'Confirm escrow creation'}
+        title={escrowExists ? "Fund Escrow" : "Create Escrow"}
+        subtitle={walletUsdc != null && escrowUsdc != null ? `Wallet ${walletUsdc.toFixed(2)} USDC → Escrow ${escrowUsdc.toFixed(2)} USDC` : (escrowExists ? 'Add funds to escrow' : 'Confirm escrow creation')}
         amountLabel={`${parseFloat(initialAmount || '0').toFixed(2)} USDC`}
         onCancel={() => setShowSheet(false)}
         onConfirm={() => onConfirmRef.current && onConfirmRef.current()}
@@ -219,5 +240,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
   },
-  
+
 });

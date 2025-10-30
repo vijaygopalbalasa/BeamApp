@@ -5,7 +5,7 @@
  */
 
 import { Connection, PublicKey, Commitment } from '@solana/web3.js';
-import { getAssociatedTokenAddress, getAccount, Account } from '@solana/spl-token';
+import { getAssociatedTokenAddress, getAccount } from '@solana/spl-token';
 import { Config } from '../config';
 
 interface BalanceResult {
@@ -77,16 +77,14 @@ class ConnectionService {
         const isLast = i === endpoints.length - 1;
         if (__DEV__) {
           console.warn(
-            `[ConnectionService] Failed to get SOL balance from RPC #${i}: ${
-              err instanceof Error ? err.message : String(err)
+            `[ConnectionService] Failed to get SOL balance from RPC #${i}: ${err instanceof Error ? err.message : String(err)
             }${isLast ? ' (all endpoints exhausted)' : ''}`
           );
         }
 
         if (isLast) {
           throw new Error(
-            `Failed to fetch SOL balance from all RPC endpoints: ${
-              err instanceof Error ? err.message : String(err)
+            `Failed to fetch SOL balance from all RPC endpoints: ${err instanceof Error ? err.message : String(err)
             }`
           );
         }
@@ -141,8 +139,7 @@ class ConnectionService {
 
         if (__DEV__) {
           console.warn(
-            `[ConnectionService] Failed to get USDC balance from RPC #${i}: ${message}${
-              isLast ? ' (all endpoints exhausted)' : ''
+            `[ConnectionService] Failed to get USDC balance from RPC #${i}: ${message}${isLast ? ' (all endpoints exhausted)' : ''
             }`
           );
         }
@@ -218,8 +215,7 @@ class ConnectionService {
         const isLast = i === endpoints.length - 1;
         if (__DEV__) {
           console.warn(
-            `[ConnectionService] RPC #${i} failed health check: ${
-              err instanceof Error ? err.message : String(err)
+            `[ConnectionService] RPC #${i} failed health check: ${err instanceof Error ? err.message : String(err)
             }${isLast ? ' (all endpoints exhausted)' : ''}`
           );
         }

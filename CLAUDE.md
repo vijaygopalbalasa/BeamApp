@@ -21,6 +21,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Focus on: What's the issue? What's the fix? Done.
 - No lengthy explanations unless asked
 
+**RULE #3: FOCUS AND MEMORY**
+- STAY FOCUSED on the current task until completion
+- DO NOT jump to other tasks or suggestions unless asked
+- REMEMBER context from earlier in the conversation
+- Complete current work before suggesting next steps
+
+**RULE #4: LIVE DEBUGGING WORKFLOW**
+- After each code fix, follow this exact sequence:
+  1. Kill Metro bundler: `pkill -f "react-native start"`
+  2. Clear Metro cache: `cd mobile/beam-app && rm -rf node_modules/.cache && rm -rf /tmp/metro-*`
+  3. Start fresh Metro: `cd mobile/beam-app && pnpm start --reset-cache` (run in background)
+  4. Rebuild APK: `cd mobile/beam-app/android && ./gradlew clean && ./gradlew assembleRelease`
+  5. Install on both devices: `adb -s <DEVICE_ID> install -r android/app/build/outputs/apk/release/app-release.apk`
+  6. Start monitors: `./scripts/monitor-device1.sh` and `./scripts/monitor-device2.sh` (in background)
+  7. Watch logs and wait for user to test
+- DO NOT create unnecessary documents or summaries during debugging
+- Focus on logs → fix → rebuild → test cycle
+
 ---
 
 ## Project Overview

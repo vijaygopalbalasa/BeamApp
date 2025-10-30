@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, FlatList, Animated, Easing, ActivityIndicator } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, StyleSheet, FlatList, Animated, Easing } from 'react-native';
 import { Card } from './ui/Card';
 import { Section } from './ui/Section';
 import { HeadingM, Body, Small } from './ui/Typography';
@@ -19,11 +19,24 @@ interface PeerDiscoveryViewProps {
   onRefresh?: () => void;
 }
 
-export const PeerDiscoveryView: React.FC<PeerDiscoveryViewProps> = ({ peers: externalPeers, onRefresh }) => {
+export const PeerDiscoveryView: React.FC<PeerDiscoveryViewProps> = ({ peers: externalPeers }) => {
   const [internalPeers, setInternalPeers] = useState<Peer[]>([]);
   const [loading, setLoading] = useState(false);
 
   const peers = externalPeers || internalPeers;
+
+  const loadPeers = useCallback(async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const discoveredPeers = await bleDirect.requestPeers();
+      setInternalPeers(discoveredPeers.map(p => ({ ...p, lastSeen: Date.now() })));
+    } catch (error) {
+      console.error('[PeerDiscoveryView] Failed to load peers:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [loading]);
 
   useEffect(() => {
     if (!externalPeers) {
@@ -31,20 +44,7 @@ export const PeerDiscoveryView: React.FC<PeerDiscoveryViewProps> = ({ peers: ext
       const interval = setInterval(loadPeers, 5000); // Refresh every 5 seconds
       return () => clearInterval(interval);
     }
-  }, [externalPeers]);
-
-  const loadPeers = async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const peers = await bleDirect.requestPeers();
-      setInternalPeers(peers.map(p => ({ ...p, lastSeen: Date.now() })));
-    } catch (error) {
-      console.error('[PeerDiscoveryView] Failed to load peers:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [externalPeers, loadPeers]);
   const [pulseAnims] = useState(() =>
     peers.reduce((acc, peer) => {
       acc[peer.address] = new Animated.Value(0);

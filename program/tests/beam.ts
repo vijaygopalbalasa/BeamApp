@@ -2,7 +2,14 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Beam } from "../target/types/beam";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint, createAccount, mintTo, getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  createAccount,
+  mintTo,
+  getAccount,
+  getOrCreateAssociatedTokenAccount,
+} from "@solana/spl-token";
 import { assert } from "chai";
 import { createAttestationProof, AttestationRole } from "./attestation-helper";
 
@@ -100,15 +107,23 @@ describe("beam", () => {
       .rpc();
 
     // Verify escrow account
-    const escrowAccount = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    const escrowAccount = await program.account.offlineEscrowAccount.fetch(
+      escrowPDA
+    );
     assert.equal(escrowAccount.owner.toString(), payer.publicKey.toString());
     assert.equal(escrowAccount.escrowBalance.toNumber(), initialAmount);
     assert.equal(escrowAccount.lastNonce.toNumber(), 0);
     assert.equal(escrowAccount.reputationScore, 100);
 
     // Verify token transfer
-    const escrowTokenAccountInfo = await getAccount(provider.connection, escrowTokenAccount);
-    assert.equal(escrowTokenAccountInfo.amount.toString(), initialAmount.toString());
+    const escrowTokenAccountInfo = await getAccount(
+      provider.connection,
+      escrowTokenAccount
+    );
+    assert.equal(
+      escrowTokenAccountInfo.amount.toString(),
+      initialAmount.toString()
+    );
   });
 
   it("Fund escrow with additional tokens", async () => {
@@ -126,7 +141,9 @@ describe("beam", () => {
       .signers([payer])
       .rpc();
 
-    const escrowAccount = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    const escrowAccount = await program.account.offlineEscrowAccount.fetch(
+      escrowPDA
+    );
     assert.equal(escrowAccount.escrowBalance.toNumber(), 600_000000);
   });
 
@@ -141,7 +158,9 @@ describe("beam", () => {
       .signers([payer])
       .rpc();
 
-    const registryAccount = await program.account.nonceRegistry.fetch(nonceRegistry);
+    const registryAccount = await program.account.nonceRegistry.fetch(
+      nonceRegistry
+    );
     assert.equal(registryAccount.lastNonce.toNumber(), 0);
   });
 
@@ -184,23 +203,123 @@ describe("beam", () => {
       .rpc();
 
     // Verify escrow balance decreased
-    const escrowAccount = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    const escrowAccount = await program.account.offlineEscrowAccount.fetch(
+      escrowPDA
+    );
     assert.equal(escrowAccount.escrowBalance.toNumber(), 590_000000);
     assert.equal(escrowAccount.lastNonce.toNumber(), 1);
     assert.equal(escrowAccount.totalSpent.toNumber(), 10_000000);
 
     // Verify merchant received tokens
-    const merchantTokenAccountInfo = await getAccount(provider.connection, merchantTokenAccount);
-    assert.equal(merchantTokenAccountInfo.amount.toString(), paymentAmount.toString());
+    const merchantTokenAccountInfo = await getAccount(
+      provider.connection,
+      merchantTokenAccount
+    );
+    assert.equal(
+      merchantTokenAccountInfo.amount.toString(),
+      paymentAmount.toString()
+    );
 
-    const registryAccount = await program.account.nonceRegistry.fetch(nonceRegistry);
+    const registryAccount = await program.account.nonceRegistry.fetch(
+      nonceRegistry
+    );
     assert.equal(registryAccount.lastNonce.toNumber(), nonce);
     assert.equal(registryAccount.recentBundleHashes.length, 1);
   });
 
+  it("Settle online payment WITHOUT attestation", async () => {
+    const paymentAmount = 15_000000; // 15 USDC
+    const nonce = 3;
+    const bundleId = `bundle-online-${nonce}`;
+
+    // No attestation proofs for online payment
+    const evidence = {
+      payerProof: null,
+      merchantProof: null,
+    };
+
+    const tx = await program.methods
+      .settleOfflinePayment(
+        new anchor.BN(paymentAmount),
+        new anchor.BN(nonce),
+        bundleId,
+        evidence
+      )
+      .accountsPartial({
+        owner: payer.publicKey,
+        payer: payer.publicKey,
+        merchant: merchant.publicKey,
+        escrowTokenAccount,
+        merchantTokenAccount,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([payer])
+      .rpc();
+
+    console.log("✅ Online payment settled without attestation:", tx);
+
+    // Verify settlement succeeded
+    const escrowAccount = await program.account.offlineEscrowAccount.fetch(
+      escrowPDA
+    );
+    assert.equal(escrowAccount.lastNonce.toNumber(), nonce);
+
+    // Verify merchant received payment
+    const merchantTokenAccountInfo = await getAccount(
+      provider.connection,
+      merchantTokenAccount
+    );
+    assert.isTrue(Number(merchantTokenAccountInfo.amount) > 0);
+  });
+
+  it("Validates invalid attestation even when optional", async () => {
+    const nonce = 4;
+    const bundleId = `bundle-invalid-${nonce}`;
+
+    // Create invalid attestation proof (all zeros)
+    const invalidProof = {
+      attestationRoot: Array(32).fill(0),
+      attestationNonce: Array(32).fill(0),
+      attestationTimestamp: new anchor.BN(Math.floor(Date.now() / 1000)),
+      verifierSignature: Array(64).fill(0),
+    };
+
+    const evidence = {
+      payerProof: invalidProof,
+      merchantProof: null,
+    };
+
+    try {
+      await program.methods
+        .settleOfflinePayment(
+          new anchor.BN(5_000000),
+          new anchor.BN(nonce),
+          bundleId,
+          evidence
+        )
+        .accountsPartial({
+          owner: payer.publicKey,
+          payer: payer.publicKey,
+          merchant: merchant.publicKey,
+          escrowTokenAccount,
+          merchantTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([payer])
+        .rpc();
+
+      assert.fail("Should have rejected invalid attestation");
+    } catch (err) {
+      assert.include(err.toString(), "InvalidAttestation");
+      console.log("✅ Invalid attestation correctly rejected");
+    }
+  });
+
   it("Reject replay attack (duplicate bundle)", async () => {
     try {
-      const replayBundleId = 'bundle-1';
+      const replayBundleId = "bundle-1";
       const payerProof = await createAttestationProof(
         AttestationRole.Payer,
         replayBundleId,
@@ -243,8 +362,12 @@ describe("beam", () => {
   it("Withdraw escrow funds", async () => {
     const withdrawAmount = 100_000000; // 100 USDC
 
-    const balanceBefore = (await getAccount(provider.connection, payerTokenAccount)).amount;
-    const escrowBefore = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    const balanceBefore = (
+      await getAccount(provider.connection, payerTokenAccount)
+    ).amount;
+    const escrowBefore = await program.account.offlineEscrowAccount.fetch(
+      escrowPDA
+    );
 
     await program.methods
       .withdrawEscrow(new anchor.BN(withdrawAmount))
@@ -258,15 +381,22 @@ describe("beam", () => {
       .signers([payer])
       .rpc();
 
-    const escrowAccount = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    const escrowAccount = await program.account.offlineEscrowAccount.fetch(
+      escrowPDA
+    );
     // Since settlement tests failed, balance should be 600M - 100M = 500M
-    assert.equal(escrowAccount.escrowBalance.toNumber(), escrowBefore.escrowBalance.toNumber() - withdrawAmount);
+    assert.equal(
+      escrowAccount.escrowBalance.toNumber(),
+      escrowBefore.escrowBalance.toNumber() - withdrawAmount
+    );
 
-    const balanceAfter = (await getAccount(provider.connection, payerTokenAccount)).amount;
+    const balanceAfter = (
+      await getAccount(provider.connection, payerTokenAccount)
+    ).amount;
     assert.equal(Number(balanceAfter - balanceBefore), withdrawAmount);
   });
 
-  it('Enforces duplicate bundle prevention', async () => {
+  it("Enforces duplicate bundle prevention", async () => {
     const paymentAmount = 5_000000;
     const nonce = 2;
     const bundleId = `bundle-${nonce}`;
@@ -323,14 +453,14 @@ describe("beam", () => {
         })
         .signers([payer])
         .rpc();
-      assert.fail('Should have failed with DuplicateBundle');
+      assert.fail("Should have failed with DuplicateBundle");
     } catch (err) {
-      assert.include(err.toString(), 'DuplicateBundle');
+      assert.include(err.toString(), "DuplicateBundle");
     }
   });
 
-  it('Enforces bundle size limit', async () => {
-    const longBundleId = 'bundle-' + 'x'.repeat(128);
+  it("Enforces bundle size limit", async () => {
+    const longBundleId = "bundle-" + "x".repeat(128);
     const payerProof = await createAttestationProof(
       AttestationRole.Payer,
       longBundleId,
@@ -364,9 +494,9 @@ describe("beam", () => {
         })
         .signers([payer])
         .rpc();
-      assert.fail('Should have failed with InvalidBundleId');
+      assert.fail("Should have failed with InvalidBundleId");
     } catch (err) {
-      assert.include(err.toString(), 'InvalidBundleId');
+      assert.include(err.toString(), "InvalidBundleId");
     }
   });
 
@@ -374,7 +504,7 @@ describe("beam", () => {
   // FRAUD REPORTING TESTS
   // ========================================================================
 
-  describe('Fraud Reporting & Slashing', () => {
+  describe("Fraud Reporting & Slashing", () => {
     let fraudBundleId: string;
     let fraudNonce: number;
     let fraudAmount: number;
@@ -385,8 +515,11 @@ describe("beam", () => {
     before(async () => {
       // Setup: Create a reporter keypair and fund it
       reporter = anchor.web3.Keypair.generate();
-      await provider.connection.requestAirdrop(reporter.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await provider.connection.requestAirdrop(
+        reporter.publicKey,
+        2 * anchor.web3.LAMPORTS_PER_SOL
+      );
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Setup: Settle a payment to create a bundle in history
       fraudNonce = 9000;
@@ -422,19 +555,27 @@ describe("beam", () => {
         .rpc();
 
       // Record state before fraud report
-      const escrowBefore = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+      const escrowBefore = await program.account.offlineEscrowAccount.fetch(
+        escrowPDA
+      );
       escrowBalanceBeforeFraud = escrowBefore.escrowBalance.toNumber();
       reputationBeforeFraud = escrowBefore.reputationScore;
 
       console.log(`\n  📊 Pre-fraud state:`);
-      console.log(`     Escrow balance: ${escrowBalanceBeforeFraud / 1_000000} USDC`);
+      console.log(
+        `     Escrow balance: ${escrowBalanceBeforeFraud / 1_000000} USDC`
+      );
       console.log(`     Reputation: ${reputationBeforeFraud}`);
-      console.log(`     Fraud bundle: ${fraudBundleId} (${fraudAmount / 1_000000} USDC)`);
+      console.log(
+        `     Fraud bundle: ${fraudBundleId} (${fraudAmount / 1_000000} USDC)`
+      );
     });
 
-    it('Reports fraud and applies slashing penalty (2x amount)', async () => {
+    it("Reports fraud and applies slashing penalty (2x amount)", async () => {
       // Create conflicting hash (different from original)
-      const conflictingHash = Array(32).fill(0).map((_, i) => (i * 7) % 256);
+      const conflictingHash = Array(32)
+        .fill(0)
+        .map((_, i) => (i * 7) % 256);
       const conflictingHashBuffer = Buffer.from(conflictingHash);
 
       await program.methods
@@ -452,65 +593,77 @@ describe("beam", () => {
 
       // Verify slashing: 2x the payment amount
       const expectedSlash = fraudAmount * 2;
-      const escrowAfter = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+      const escrowAfter = await program.account.offlineEscrowAccount.fetch(
+        escrowPDA
+      );
 
       assert.equal(
         escrowAfter.escrowBalance.toNumber(),
         escrowBalanceBeforeFraud - expectedSlash,
-        'Escrow balance should decrease by 2x payment amount'
+        "Escrow balance should decrease by 2x payment amount"
       );
 
       assert.equal(
         escrowAfter.stakeLocked.toNumber(),
         expectedSlash,
-        'Slashed funds should be locked in stake_locked'
+        "Slashed funds should be locked in stake_locked"
       );
 
-      console.log(`  ✅ Slashed ${expectedSlash / 1_000000} USDC (2x ${fraudAmount / 1_000000} USDC)`);
+      console.log(
+        `  ✅ Slashed ${expectedSlash / 1_000000} USDC (2x ${
+          fraudAmount / 1_000000
+        } USDC)`
+      );
     });
 
-    it('Applies reputation penalty of -1000 for fraud', async () => {
-      const escrowAfter = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    it("Applies reputation penalty of -1000 for fraud", async () => {
+      const escrowAfter = await program.account.offlineEscrowAccount.fetch(
+        escrowPDA
+      );
 
       assert.equal(
         escrowAfter.reputationScore,
         reputationBeforeFraud - 1000,
-        'Reputation should decrease by 1000'
+        "Reputation should decrease by 1000"
       );
 
-      console.log(`  ✅ Reputation: ${reputationBeforeFraud} → ${escrowAfter.reputationScore} (-1000)`);
+      console.log(
+        `  ✅ Reputation: ${reputationBeforeFraud} → ${escrowAfter.reputationScore} (-1000)`
+      );
     });
 
-    it('Increments fraud count correctly', async () => {
-      const escrowAfter = await program.account.offlineEscrowAccount.fetch(escrowPDA);
+    it("Increments fraud count correctly", async () => {
+      const escrowAfter = await program.account.offlineEscrowAccount.fetch(
+        escrowPDA
+      );
 
       assert.equal(
         escrowAfter.fraudCount,
         1,
-        'Fraud count should be 1 after first fraud report'
+        "Fraud count should be 1 after first fraud report"
       );
 
       assert.isAbove(
         escrowAfter.lastFraudTimestamp.toNumber(),
         0,
-        'Last fraud timestamp should be set'
+        "Last fraud timestamp should be set"
       );
 
       console.log(`  ✅ Fraud count: ${escrowAfter.fraudCount}`);
     });
 
-    it('Prevents duplicate fraud reports for same bundle', async () => {
+    it("Prevents duplicate fraud reports for same bundle", async () => {
       // Attempt to report the same fraud again
-      const conflictingHash = Array(32).fill(0).map((_, i) => (i * 7) % 256);
+      const conflictingHash = Array(32)
+        .fill(0)
+        .map((_, i) => (i * 7) % 256);
       const conflictingHashBuffer = Buffer.from(conflictingHash);
 
       try {
         await program.methods
-          .reportFraudulentBundle(
-            fraudBundleId,
-            conflictingHashBuffer,
-            { duplicateBundle: {} }
-          )
+          .reportFraudulentBundle(fraudBundleId, conflictingHashBuffer, {
+            duplicateBundle: {},
+          })
           .accountsPartial({
             payer: payer.publicKey,
             reporter: reporter.publicKey,
@@ -518,24 +671,22 @@ describe("beam", () => {
           .signers([reporter])
           .rpc();
 
-        assert.fail('Should have failed with FraudEvidenceExists');
+        assert.fail("Should have failed with FraudEvidenceExists");
       } catch (err) {
-        assert.include(err.toString(), 'FraudEvidenceExists');
+        assert.include(err.toString(), "FraudEvidenceExists");
         console.log(`  ✅ Duplicate fraud report rejected`);
       }
     });
 
-    it('Rejects fraud report for non-existent bundle', async () => {
-      const nonExistentBundleId = 'bundle-does-not-exist-99999';
+    it("Rejects fraud report for non-existent bundle", async () => {
+      const nonExistentBundleId = "bundle-does-not-exist-99999";
       const conflictingHash = Buffer.from(Array(32).fill(42));
 
       try {
         await program.methods
-          .reportFraudulentBundle(
-            nonExistentBundleId,
-            conflictingHash,
-            { other: {} }
-          )
+          .reportFraudulentBundle(nonExistentBundleId, conflictingHash, {
+            other: {},
+          })
           .accountsPartial({
             payer: payer.publicKey,
             reporter: reporter.publicKey,
@@ -543,14 +694,14 @@ describe("beam", () => {
           .signers([reporter])
           .rpc();
 
-        assert.fail('Should have failed with BundleHistoryNotFound');
+        assert.fail("Should have failed with BundleHistoryNotFound");
       } catch (err) {
-        assert.include(err.toString(), 'BundleHistoryNotFound');
+        assert.include(err.toString(), "BundleHistoryNotFound");
         console.log(`  ✅ Non-existent bundle fraud rejected`);
       }
     });
 
-    it('Rejects fraud report when escrow balance insufficient for 2x slash', async () => {
+    it("Rejects fraud report when escrow balance insufficient for 2x slash", async () => {
       // Setup: Create a bundle with amount > half of remaining escrow balance
       const largeAmount = 400_000000; // 400 USDC
       const largeNonce = 9999;
@@ -589,11 +740,9 @@ describe("beam", () => {
 
       try {
         await program.methods
-          .reportFraudulentBundle(
-            largeBundleId,
-            conflictingHash,
-            { invalidAttestation: {} }
-          )
+          .reportFraudulentBundle(largeBundleId, conflictingHash, {
+            invalidAttestation: {},
+          })
           .accountsPartial({
             payer: payer.publicKey,
             reporter: reporter.publicKey,
@@ -601,48 +750,63 @@ describe("beam", () => {
           .signers([reporter])
           .rpc();
 
-        assert.fail('Should have failed with InsufficientFundsForSlash');
+        assert.fail("Should have failed with InsufficientFundsForSlash");
       } catch (err) {
-        assert.include(err.toString(), 'InsufficientFundsForSlash');
+        assert.include(err.toString(), "InsufficientFundsForSlash");
         console.log(`  ✅ Insufficient balance for slash rejected`);
       }
     });
 
-    it('Stores fraud record in nonce registry', async () => {
+    it("Stores fraud record in nonce registry", async () => {
       const registry = await program.account.nonceRegistry.fetch(
         anchor.web3.PublicKey.findProgramAddressSync(
-          [Buffer.from('nonce'), payer.publicKey.toBuffer()],
+          [Buffer.from("nonce"), payer.publicKey.toBuffer()],
           program.programId
         )[0]
       );
 
       // Should have at least 1 fraud record from earlier test
-      assert.isAtLeast(registry.fraudRecords.length, 1, 'Should have fraud records');
+      assert.isAtLeast(
+        registry.fraudRecords.length,
+        1,
+        "Should have fraud records"
+      );
 
       const fraudRecord = registry.fraudRecords[0];
-      assert.equal(fraudRecord.reporter.toBase58(), reporter.publicKey.toBase58());
+      assert.equal(
+        fraudRecord.reporter.toBase58(),
+        reporter.publicKey.toBase58()
+      );
       assert.isAbove(fraudRecord.reportedAt.toNumber(), 0);
 
-      console.log(`  ✅ Fraud record stored (${registry.fraudRecords.length} total)`);
+      console.log(
+        `  ✅ Fraud record stored (${registry.fraudRecords.length} total)`
+      );
     });
 
-    it('Handles circular buffer for fraud records (max 16)', async () => {
+    it("Handles circular buffer for fraud records (max 16)", async () => {
       // This test would create 16+ fraud reports to test the circular buffer
       // For now, we verify the concept by checking that fraud records exist
       const registry = await program.account.nonceRegistry.fetch(
         anchor.web3.PublicKey.findProgramAddressSync(
-          [Buffer.from('nonce'), payer.publicKey.toBuffer()],
+          [Buffer.from("nonce"), payer.publicKey.toBuffer()],
           program.programId
         )[0]
       );
 
       // Should never exceed MAX_FRAUD_RECORDS (16)
-      assert.isAtMost(registry.fraudRecords.length, 16, 'Fraud records should not exceed 16');
+      assert.isAtMost(
+        registry.fraudRecords.length,
+        16,
+        "Fraud records should not exceed 16"
+      );
 
-      console.log(`  ✅ Fraud records within limit (${registry.fraudRecords.length}/16)`);
+      console.log(
+        `  ✅ Fraud records within limit (${registry.fraudRecords.length}/16)`
+      );
     });
 
-    it('Rejects fraud report with matching bundle hash and conflicting hash', async () => {
+    it("Rejects fraud report with matching bundle hash and conflicting hash", async () => {
       // Create another bundle for this test
       const testNonce = 8888;
       const testBundleId = `test-matching-hash-${testNonce}`;
@@ -677,7 +841,9 @@ describe("beam", () => {
         .rpc();
 
       // Compute the actual bundle hash (using keccak)
-      const bundleHash = anchor.web3.Keypair.generate().publicKey.toBuffer().slice(0, 32);
+      const bundleHash = anchor.web3.Keypair.generate()
+        .publicKey.toBuffer()
+        .slice(0, 32);
 
       try {
         await program.methods
@@ -693,24 +859,20 @@ describe("beam", () => {
           .signers([reporter])
           .rpc();
 
-        assert.fail('Should have failed with FraudHashMatches');
+        assert.fail("Should have failed with FraudHashMatches");
       } catch (err) {
-        assert.include(err.toString(), 'FraudHashMatches');
+        assert.include(err.toString(), "FraudHashMatches");
         console.log(`  ✅ Matching hash fraud rejected`);
       }
     });
 
-    it('Validates bundle ID is not empty', async () => {
-      const emptyBundleId = '';
+    it("Validates bundle ID is not empty", async () => {
+      const emptyBundleId = "";
       const conflictingHash = Buffer.from(Array(32).fill(1));
 
       try {
         await program.methods
-          .reportFraudulentBundle(
-            emptyBundleId,
-            conflictingHash,
-            { other: {} }
-          )
+          .reportFraudulentBundle(emptyBundleId, conflictingHash, { other: {} })
           .accountsPartial({
             payer: payer.publicKey,
             reporter: reporter.publicKey,
@@ -718,14 +880,14 @@ describe("beam", () => {
           .signers([reporter])
           .rpc();
 
-        assert.fail('Should have failed with InvalidBundleId');
+        assert.fail("Should have failed with InvalidBundleId");
       } catch (err) {
-        assert.include(err.toString(), 'InvalidBundleId');
+        assert.include(err.toString(), "InvalidBundleId");
         console.log(`  ✅ Empty bundle ID rejected`);
       }
     });
 
-    it('Validates conflicting hash is not all zeros', async () => {
+    it("Validates conflicting hash is not all zeros", async () => {
       const testNonce = 7777;
       const testBundleId = `test-zero-hash-${testNonce}`;
       const testAmount = 3_000000;
@@ -762,11 +924,7 @@ describe("beam", () => {
 
       try {
         await program.methods
-          .reportFraudulentBundle(
-            testBundleId,
-            zeroHash,
-            { other: {} }
-          )
+          .reportFraudulentBundle(testBundleId, zeroHash, { other: {} })
           .accountsPartial({
             payer: payer.publicKey,
             reporter: reporter.publicKey,
@@ -774,9 +932,9 @@ describe("beam", () => {
           .signers([reporter])
           .rpc();
 
-        assert.fail('Should have failed with InvalidBundleHash');
+        assert.fail("Should have failed with InvalidBundleHash");
       } catch (err) {
-        assert.include(err.toString(), 'InvalidBundleHash');
+        assert.include(err.toString(), "InvalidBundleHash");
         console.log(`  ✅ Zero conflicting hash rejected`);
       }
     });

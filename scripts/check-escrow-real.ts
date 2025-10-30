@@ -163,6 +163,34 @@ async function investigateEscrow() {
 
     // Read bump (1 byte, u8)
     const bump = data.readUInt8(offset);
+    offset += 1;
+
+    // BACKWARDS COMPATIBILITY CHECK
+    const expectedOldSize = 8 + 32 + 32 + 8 + 8 + 2 + 8 + 8 + 1; // 107 bytes (old)
+    const expectedNewSize = expectedOldSize + 8 + 4 + 8; // 127 bytes (new, +20 bytes)
+
+    let stakeLocked = BigInt(0);
+    let fraudCount = 0;
+    let lastFraudTimestamp = BigInt(0);
+    let accountVersion = 'UNKNOWN';
+
+    if (data.length >= expectedNewSize) {
+      // New account with fraud fields
+      accountVersion = 'NEW (with fraud fields)';
+      stakeLocked = data.readBigUInt64LE(offset);
+      offset += 8;
+
+      fraudCount = data.readUInt32LE(offset);
+      offset += 4;
+
+      lastFraudTimestamp = data.readBigInt64LE(offset);
+    } else if (data.length >= expectedOldSize) {
+      // Old account without fraud fields
+      accountVersion = 'OLD (no fraud fields - account created before program upgrade)';
+    } else {
+      console.log(`\n⚠️  WARNING: Unexpected account size: ${data.length} bytes`);
+      console.log(`   Expected: ${expectedOldSize} (old) or ${expectedNewSize} (new)`);
+    }
 
     const escrowAccount = {
       owner,
@@ -172,11 +200,16 @@ async function investigateEscrow() {
       reputationScore,
       totalSpent,
       createdAt,
-      bump
+      bump,
+      stakeLocked,
+      fraudCount,
+      lastFraudTimestamp,
+      accountVersion
     };
 
     console.log('\n📊 ESCROW ACCOUNT DATA:');
     console.log('─'.repeat(80));
+    console.log(`   🔖 Account Version: ${escrowAccount.accountVersion}`);
     console.log(`   Owner: ${escrowAccount.owner.toBase58()}`);
     console.log(`   Escrow Token Account: ${escrowAccount.escrowTokenAccount.toBase58()}`);
     console.log(`   Escrow Balance: ${formatAmount(escrowAccount.escrowBalance)}`);
@@ -185,6 +218,13 @@ async function investigateEscrow() {
     console.log(`   Total Spent: ${formatAmount(escrowAccount.totalSpent)}`);
     console.log(`   Created At: ${formatDate(escrowAccount.createdAt)}`);
     console.log(`   Bump: ${escrowAccount.bump}`);
+    if (accountVersion === 'NEW (with fraud fields)') {
+      console.log(`   Stake Locked: ${formatAmount(escrowAccount.stakeLocked)}`);
+      console.log(`   Fraud Count: ${escrowAccount.fraudCount}`);
+      console.log(`   Last Fraud: ${formatDate(escrowAccount.lastFraudTimestamp)}`);
+    } else {
+      console.log(`   ⚠️  Fraud fields not available (old account format)`);
+    }
     console.log('─'.repeat(80));
 
     // ===== STEP 4: FETCH TOKEN ACCOUNT BALANCE =====

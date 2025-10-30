@@ -1,8 +1,21 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Beam } from "../target/types/beam";
-import { PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint, createInitializeAccountInstruction, getMinimumBalanceForRentExemptAccount, ACCOUNT_SIZE, mintTo, getAccount } from "@solana/spl-token";
+import {
+  PublicKey,
+  Keypair,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  createInitializeAccountInstruction,
+  getMinimumBalanceForRentExemptAccount,
+  ACCOUNT_SIZE,
+  mintTo,
+  getAccount,
+} from "@solana/spl-token";
 import { assert } from "chai";
 
 describe("beam-simple", () => {
@@ -34,7 +47,9 @@ describe("beam-simple", () => {
 
     // Create payer token account (simple keypair-owned)
     const payerTokenKeypair = Keypair.generate();
-    const lamports = await getMinimumBalanceForRentExemptAccount(provider.connection);
+    const lamports = await getMinimumBalanceForRentExemptAccount(
+      provider.connection
+    );
     const createPayerAccountIx = SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
       newAccountPubkey: payerTokenKeypair.publicKey,
@@ -81,7 +96,10 @@ describe("beam-simple", () => {
       mint,
       escrowPDA // PDA as owner
     );
-    const tx2 = new Transaction().add(createEscrowAccountIx, initEscrowAccountIx);
+    const tx2 = new Transaction().add(
+      createEscrowAccountIx,
+      initEscrowAccountIx
+    );
     await provider.sendAndConfirm(tx2, [escrowTokenAccount]);
 
     // Create merchant token account
@@ -98,7 +116,10 @@ describe("beam-simple", () => {
       mint,
       merchant.publicKey
     );
-    const tx3 = new Transaction().add(createMerchantAccountIx, initMerchantAccountIx);
+    const tx3 = new Transaction().add(
+      createMerchantAccountIx,
+      initMerchantAccountIx
+    );
     await provider.sendAndConfirm(tx3, [merchantTokenAccount]);
   });
 
@@ -119,7 +140,10 @@ describe("beam-simple", () => {
     assert.equal(escrow.escrowBalance.toNumber(), 500_000000);
     assert.equal(escrow.lastNonce.toNumber(), 0);
 
-    const escrowToken = await getAccount(provider.connection, escrowTokenAccount.publicKey);
+    const escrowToken = await getAccount(
+      provider.connection,
+      escrowTokenAccount.publicKey
+    );
     assert.equal(escrowToken.amount.toString(), "500000000");
   });
 
@@ -141,7 +165,10 @@ describe("beam-simple", () => {
     assert.equal(escrow.escrowBalance.toNumber(), 490_000000);
     assert.equal(escrow.lastNonce.toNumber(), 1);
 
-    const merchantToken = await getAccount(provider.connection, merchantTokenAccount.publicKey);
+    const merchantToken = await getAccount(
+      provider.connection,
+      merchantTokenAccount.publicKey
+    );
     assert.equal(merchantToken.amount.toString(), "10000000");
   });
 

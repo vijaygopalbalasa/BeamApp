@@ -18,12 +18,15 @@ import { verifyCompletedBundle, computeBundleHash } from '@beam/shared';
 import { BeamProgramClient, type FraudReasonKind } from '../solana/BeamProgram';
 import { bundleStorage } from '../storage/BundleStorage';
 import { Config } from '../config';
-import { getUseServerSettlement } from '../utils/flags';
 import bs58 from 'bs58';
 import { attestationService, type AttestedBundle } from './AttestationService';
 import type { BeamSigner } from '../wallet/WalletManager';
 import { Buffer } from 'buffer';
 import type { NonceRegistryAccount } from '../solana/types';
+import { sha256 } from '@noble/hashes/sha256';
+import { createModuleLogger } from './Logger';
+
+const Logger = createModuleLogger('SettlementService');
 
 type SettlementInput = OfflineBundle | AttestedBundle;
 
@@ -130,30 +133,11 @@ export class SettlementService {
     // CRITICAL: Verifier service validates attestations and returns signed proofs
     const proofs = await this.verifyWithService(bundle, payerAttestation, merchantAttestation);
 
-    if (getUseServerSettlement()) {
-      // Server settlement mode for RN reliability
-      const signature = await this.settleViaServer(bundle, proofs);
+    // Always use server settlement for RN reliability and proper devnet flow
+    const signature = await this.settleViaServer(bundle, proofs);
 
-      await bundleStorage.removeBundle(bundle.tx_id).catch(() => {});
-      return { signature, bundleId: bundle.tx_id };
-    }
-
-    // On-device settlement (Anchor)
-    await this.beamClient!.ensureNonceRegistry();
-    const merchantPubkeyObj = new PublicKey(bundle.merchant_pubkey);
-    const tx = await this.beamClient!.settleOfflinePayment(
-      merchantPubkeyObj,
-      bundle.token.amount,
-      bundle.nonce,
-      bundle.tx_id,
-      {
-        payerProof: proofs.payer,
-        merchantProof: proofs.merchant,
-      }
-    );
-
-    await bundleStorage.removeBundle(bundle.tx_id).catch(() => {});
-    return { signature: tx, bundleId: bundle.tx_id };
+    await bundleStorage.removeBundle(bundle.tx_id).catch(() => { });
+    return { signature, bundleId: bundle.tx_id };
   }
 
   /**
@@ -186,11 +170,11 @@ export class SettlementService {
         },
         merchant: proofs.merchant
           ? {
-              root: Buffer.from(proofs.merchant.root).toString('base64'),
-              nonce: Buffer.from(proofs.merchant.nonce).toString('base64'),
-              timestamp: proofs.merchant.timestamp,
-              signature: Buffer.from(proofs.merchant.signature).toString('base64'),
-            }
+            root: Buffer.from(proofs.merchant.root).toString('base64'),
+            nonce: Buffer.from(proofs.merchant.nonce).toString('base64'),
+            timestamp: proofs.merchant.timestamp,
+            signature: Buffer.from(proofs.merchant.signature).toString('base64'),
+          }
           : undefined,
       },
     };
@@ -283,6 +267,68 @@ export class SettlementService {
     const hash = computeBundleHash(bundle);
     return this.beamClient!.reportFraudulentBundle(bundle.tx_id, payer, hash, reason);
   }
+
+  /**
+   * Direct online payment WITHOUT attestation
+   * For online payments only - skips hardware attestation
+   * Uses the updated Solana program that accepts optional attestation
+   */
+  async settleDirectPaymentOnline(
+    merchantPubkey: PublicKey,
+    amount: number,
+    signer: BeamSigner
+  ): Promise<string> {
+    try {
+      Logger.info('SettlementService', 'Starting direct online payment (no attestation)');
+
+      if (!this.beamClient) {
+        this.initializeClient(signer);
+      }
+
+      const payerPubkey = signer.publicKey;
+
+      // Ensure nonce registry exists
+      await this.beamClient!.ensureNonceRegistry();
+
+      // Get current nonce and increment
+      const nonceRegistry = await this.beamClient!.getNonceRegistry(payerPubkey);
+      const nonce = (nonceRegistry?.lastNonce || 0) + 1;
+
+      // Generate unique bundle ID
+      const bundleId = `online-${Date.now()}-${nonce}`;
+
+      // Create evidence with NO attestation (program now accepts optional)
+      const evidence = {
+        payerProof: null,
+        merchantProof: null,
+      };
+
+      Logger.info('SettlementService', `Settling online payment: ${bundleId}`);
+
+      // Call Solana program (updated to accept optional attestation)
+      const signature = await this.beamClient!.settleOfflinePayment(
+        merchantPubkey,
+        amount,
+        nonce,
+        bundleId,
+        evidence
+      );
+
+      Logger.info('SettlementService', `Online payment settled: ${signature}`);
+
+      return signature;
+    } catch (error) {
+      Logger.error('SettlementService', 'Failed to settle online payment', error);
+      throw error;
+    }
+  }
+
+  // SECURITY: Removed deprecated methods that used hardcoded test keys:
+  // - settleDirectPayment() - used fake attestation
+  // - createDirectAttestationProof() - created fake proofs
+  // - computeAttestationRoot() - not needed for online payments
+  // - signMessage() - contained HARDCODED TEST_VERIFIER_PRIVATE_KEY
+  // All offline payments now properly use the verifier service for real attestations
 
   async settleMerchantBundles(
     merchantSigner: BeamSigner,

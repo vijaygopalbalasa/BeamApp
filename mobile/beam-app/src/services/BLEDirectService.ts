@@ -27,7 +27,7 @@
 
 import { NativeModules, Platform, NativeEventEmitter, EmitterSubscription } from 'react-native';
 import { Buffer } from 'buffer';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import EncryptedStorage from 'react-native-encrypted-storage';
 import type { OfflineBundle, AttestationEnvelope } from '@beam/shared';
 import { encodeOfflineBundle, decodeOfflineBundle, type PersistedOfflineBundle } from '../storage/BundleStorage';
 
@@ -116,12 +116,6 @@ interface PendingAck {
   timeoutHandle: ReturnType<typeof setTimeout>;
 }
 
-enum DeliveryStatus {
-  Pending = 'pending',
-  Delivered = 'delivered',
-  Failed = 'failed',
-  TimedOut = 'timedout',
-}
 
 const NativeBLE: BLEDirectModule | undefined =
   (NativeModules as unknown as {
@@ -315,8 +309,17 @@ class BLEDirectService {
     payerAttestation?: AttestationEnvelope,
     merchantAttestation?: AttestationEnvelope
   ): Promise<BLEBroadcastResult> {
+    console.log('[BLEDirect] broadcastBundle called with bundle:', bundle.tx_id);
+
+    if (!this.started) {
+      console.warn('[BLEDirect] BLE not started, cannot broadcast');
+      return { success: false, peersReached: 0 };
+    }
+
     const message: BLEBundleMessage = { bundle, payerAttestation, merchantAttestation };
     const targetService = serviceUuid ?? this.serviceUuid ?? undefined;
+
+    console.log('[BLEDirect] Broadcasting bundle via native bridge...');
     return this.sendPayload(message, targetService);
   }
 
@@ -554,45 +557,61 @@ class BLEDirectService {
   }
 
   private async sendPayload(message: BLEBundleMessage, serviceUuid?: string): Promise<BLEBroadcastResult> {
-    console.log('[BLEDirect] Sending payload...');
+    console.log('[BLEDirect] Sending payload for bundle:', message.bundle.tx_id);
 
     if (serviceUuid) {
       await this.ensureActive(serviceUuid);
     }
     if (!this.started) {
-      throw new Error('BLE Direct not started');
+      console.warn('[BLEDirect] BLE not started, cannot send payload');
+      return { success: false, peersReached: 0 };
     }
 
-    // Prepare bundle data for native module (as object, not JSON string)
-    const bundleData = {
-      ...encodeOfflineBundle(message.bundle),
-      payerAttestation: encodeAttestation(message.payerAttestation),
-      merchantAttestation: encodeAttestation(message.merchantAttestation),
-    };
+    try {
+      // Prepare bundle data for native module (as object, not JSON string)
+      const bundleData = {
+        ...encodeOfflineBundle(message.bundle),
+        payerAttestation: encodeAttestation(message.payerAttestation),
+        merchantAttestation: encodeAttestation(message.merchantAttestation),
+      };
 
-    // Check size (convert to JSON for size check)
-    const payload = JSON.stringify(bundleData);
-    if (Buffer.byteLength(payload, 'utf8') > MAX_BLE_PAYLOAD_BYTES) {
-      throw new Error('BLE payload exceeds size limit');
+      // Check size (convert to JSON for size check)
+      const payload = JSON.stringify(bundleData);
+      if (Buffer.byteLength(payload, 'utf8') > MAX_BLE_PAYLOAD_BYTES) {
+        console.error('[BLEDirect] Payload too large:', Buffer.byteLength(payload, 'utf8'), '>', MAX_BLE_PAYLOAD_BYTES);
+        return { success: false, peersReached: 0 };
+      }
+
+      console.log('[BLEDirect] Broadcasting bundle:', bundleData.tx_id);
+      const result = await this.bridge.broadcastBundle(bundleData);
+      console.log('[BLEDirect] Broadcast result:', result);
+
+      // Phase 2.3: Start tracking ACK for this bundle
+      if (result.success && message.bundle.tx_id) {
+        this.trackBundleAck(message.bundle.tx_id, message);
+      }
+
+      const now = Date.now();
+      this.updateDiagnostics({
+        lastBroadcastAt: now,
+        peersReached: result.peersReached,
+        lastSuccessAt: result.success ? now : this.diagnostics.lastSuccessAt,
+        lastError: result.success ? null : this.diagnostics.lastError,
+      });
+
+      if (result.success) {
+        console.log('[BLEDirect] ✅ Broadcast successful, peers reached:', result.peersReached);
+      } else {
+        console.warn('[BLEDirect] ❌ Broadcast failed, peers reached:', result.peersReached);
+      }
+
+      return result;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error('[BLEDirect] sendPayload error:', errorMsg);
+      this.updateDiagnostics({ lastError: errorMsg });
+      return { success: false, peersReached: 0 };
     }
-
-    console.log('[BLEDirect] Broadcasting bundle:', bundleData.tx_id);
-    const result = await this.bridge.broadcastBundle(bundleData);
-    console.log('[BLEDirect] Broadcast result:', result);
-
-    // Phase 2.3: Start tracking ACK for this bundle
-    if (result.success && message.bundle.tx_id) {
-      this.trackBundleAck(message.bundle.tx_id, message);
-    }
-
-    const now = Date.now();
-    this.updateDiagnostics({
-      lastBroadcastAt: now,
-      peersReached: result.peersReached,
-      lastSuccessAt: result.success ? now : this.diagnostics.lastSuccessAt,
-      lastError: result.success ? null : this.diagnostics.lastError,
-    });
-    return result;
   }
 
   private startFlushLoop(): void {
@@ -620,7 +639,7 @@ class BLEDirectService {
     const now = Date.now();
     let queueChanged = false;
 
-    for (let i = 0; i < this.queue.length; ) {
+    for (let i = 0; i < this.queue.length;) {
       const item = this.queue[i];
       if (item.nextAttemptAt > now) {
         i += 1;
@@ -775,7 +794,7 @@ class BLEDirectService {
    */
   private async loadQueue(): Promise<void> {
     try {
-      const json = await AsyncStorage.getItem(BLE_QUEUE_STORAGE_KEY);
+      const json = await EncryptedStorage.getItem(BLE_QUEUE_STORAGE_KEY);
       if (!json) {
         return;
       }
@@ -808,7 +827,7 @@ class BLEDirectService {
         console.error('Failed to load BLE queue:', err);
       }
       // On parse error, clear corrupted queue
-      await AsyncStorage.removeItem(BLE_QUEUE_STORAGE_KEY).catch(() => {});
+      await EncryptedStorage.removeItem(BLE_QUEUE_STORAGE_KEY).catch(() => { });
     }
   }
 
@@ -830,7 +849,7 @@ class BLEDirectService {
         initialDelayMs: item.initialDelayMs,
       }));
 
-      await AsyncStorage.setItem(BLE_QUEUE_STORAGE_KEY, JSON.stringify(persistedQueue));
+      await EncryptedStorage.setItem(BLE_QUEUE_STORAGE_KEY, JSON.stringify(persistedQueue));
     } catch (err) {
       if (__DEV__) {
         console.error('Failed to save BLE queue:', err);
@@ -843,7 +862,7 @@ class BLEDirectService {
    */
   private async clearQueue(): Promise<void> {
     try {
-      await AsyncStorage.removeItem(BLE_QUEUE_STORAGE_KEY);
+      await EncryptedStorage.removeItem(BLE_QUEUE_STORAGE_KEY);
     } catch (err) {
       if (__DEV__) {
         console.error('Failed to clear BLE queue:', err);

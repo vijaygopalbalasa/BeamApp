@@ -74,10 +74,10 @@ class TestUsdcMintService {
       if (!accountInfo) {
         // Account doesn't exist - provide helpful error
         throw new Error(
-          `USDC token account doesn't exist yet.\n\n` +
-          `Please use the web faucet to create it:\n` +
+          'USDC token account doesn\'t exist yet.\n\n' +
+          'Please use the web faucet to create it:\n' +
           `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}\n\n` +
-          `After receiving your first USDC, this app will work automatically.`
+          'After receiving your first USDC, this app will work automatically.'
         );
       }
 
@@ -86,12 +86,12 @@ class TestUsdcMintService {
       // The user MUST use the web faucet.
 
       throw new Error(
-        `Automated USDC minting not available.\n\n` +
-        `Please use one of these web faucets:\n\n` +
-        `1. SPL Token Faucet (unlimited):\n` +
+        'Automated USDC minting not available.\n\n' +
+        'Please use one of these web faucets:\n\n' +
+        '1. SPL Token Faucet (unlimited):\n' +
         `https://spl-token-faucet.com/?token-name=USDC&mint=${Config.tokens.usdc.mint}\n\n` +
-        `2. Circle Faucet (10 USDC/hour):\n` +
-        `https://faucet.circle.com/\n\n` +
+        '2. Circle Faucet (10 USDC/hour):\n' +
+        'https://faucet.circle.com/\n\n' +
         `Your USDC address:\n${userTokenAccount.toBase58()}`
       );
     } catch (err) {

@@ -95,23 +95,24 @@ pub mod beam {
 
         let merchant_key = ctx.accounts.merchant.key();
 
-        let payer_proof = evidence
-            .payer_proof
-            .as_ref()
-            .ok_or(BeamError::MissingAttestation)?;
-        require!(
-            verify_attestation(
-                payer_proof,
-                AttestationRole::Payer,
-                &bundle_id,
-                &ctx.accounts.payer.key(),
-                &merchant_key,
-                amount,
-                payer_nonce,
-                now,
-            ),
-            BeamError::InvalidAttestation
-        );
+        // Make attestation optional - validate only if provided
+        // For online payments, attestation can be omitted (direct wallet signature verification)
+        // For offline payments, client should provide hardware attestation
+        if let Some(payer_proof) = evidence.payer_proof.as_ref() {
+            require!(
+                verify_attestation(
+                    payer_proof,
+                    AttestationRole::Payer,
+                    &bundle_id,
+                    &ctx.accounts.payer.key(),
+                    &merchant_key,
+                    amount,
+                    payer_nonce,
+                    now,
+                ),
+                BeamError::InvalidAttestation
+            );
+        }
 
         if let Some(merchant_proof) = evidence.merchant_proof.as_ref() {
             require!(
@@ -348,6 +349,59 @@ pub mod beam {
 
         Ok(())
     }
+
+    /// Migrate old escrow account (107 bytes) to new format (127 bytes)
+    /// This is a one-time migration for accounts created before fraud fields were added
+    pub fn migrate_escrow(ctx: Context<MigrateEscrow>) -> Result<()> {
+        msg!("Migrating escrow account to new format with fraud fields");
+
+        let escrow_info = &ctx.accounts.escrow_account;
+        let owner = &ctx.accounts.owner;
+        let system_program = &ctx.accounts.system_program;
+
+        // Manually reallocate the account
+        let current_size = escrow_info.data_len();
+        let new_size = 8 + std::mem::size_of::<OfflineEscrowAccount>();
+
+        msg!("Current size: {}, New size: {}", current_size, new_size);
+
+        if current_size < new_size {
+            // Reallocate to new size using realloc (size, zero_init)
+            escrow_info.realloc(new_size, false)?;
+
+            // Transfer lamports for rent exemption difference
+            let rent = Rent::get()?;
+            let old_rent = rent.minimum_balance(current_size);
+            let new_rent = rent.minimum_balance(new_size);
+            let lamports_diff = new_rent.saturating_sub(old_rent);
+
+            if lamports_diff > 0 {
+                msg!("Transferring {} lamports for rent", lamports_diff);
+                anchor_lang::system_program::transfer(
+                    CpiContext::new(
+                        system_program.to_account_info(),
+                        anchor_lang::system_program::Transfer {
+                            from: owner.to_account_info(),
+                            to: escrow_info.to_account_info(),
+                        },
+                    ),
+                    lamports_diff,
+                )?;
+            }
+
+            // Zero out the new bytes (fraud fields at the end)
+            let mut data = escrow_info.try_borrow_mut_data()?;
+            let fraud_offset = current_size;
+            data[fraud_offset..new_size].fill(0);
+
+            msg!("✅ Account reallocated from {} to {} bytes", current_size, new_size);
+            msg!("✅ Fraud fields initialized to 0");
+        } else {
+            msg!("⚠️  Account already at correct size, no migration needed");
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -501,6 +555,22 @@ pub struct ReportFraud<'info> {
     pub payer: UncheckedAccount<'info>,
 
     pub reporter: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateEscrow<'info> {
+    /// CHECK: Manual validation and reallocation
+    #[account(
+        mut,
+        seeds = [b"escrow", owner.key().as_ref()],
+        bump,
+    )]
+    pub escrow_account: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[account]

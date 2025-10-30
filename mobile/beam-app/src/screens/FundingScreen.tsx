@@ -1,8 +1,7 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, Alert, Linking, RefreshControl, Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { PublicKey } from '@solana/web3.js';
 import { wallet } from '../wallet/WalletManager';
 import { faucetService } from '../services/FaucetService';
 import { solanaFaucetService } from '../services/SolanaFaucetService';
@@ -176,10 +175,10 @@ export function FundingScreen({ navigation }: FundingScreenProps) {
 
       if (solanaFaucetService.isInternalError(error)) {
         errorTitle = 'Faucet Temporarily Unavailable';
-        errorMessage = `The Solana devnet faucet is experiencing high traffic or internal errors.\n\nPlease try one of these alternatives:\n\n1. Use web faucet: faucet.solana.com\n2. Try QuickNode faucet\n3. Wait a few minutes and try again\n\nCurrent balance will be refreshed.`;
+        errorMessage = 'The Solana devnet faucet is experiencing high traffic or internal errors.\n\nPlease try one of these alternatives:\n\n1. Use web faucet: faucet.solana.com\n2. Try QuickNode faucet\n3. Wait a few minutes and try again\n\nCurrent balance will be refreshed.';
       } else if (solanaFaucetService.isRateLimitError(error)) {
         errorTitle = 'Rate Limit Reached';
-        errorMessage = `You've reached the airdrop rate limit (2 SOL/hour, 24 SOL/day).\n\nPlease:\n1. Wait 1 hour and try again\n2. Use web faucet: faucet.solana.com\n3. Try a different network connection\n\nYour current balance will be refreshed.`;
+        errorMessage = 'You\'ve reached the airdrop rate limit (2 SOL/hour, 24 SOL/day).\n\nPlease:\n1. Wait 1 hour and try again\n2. Use web faucet: faucet.solana.com\n3. Try a different network connection\n\nYour current balance will be refreshed.';
       }
 
       // Show error in transaction status modal
@@ -199,7 +198,7 @@ export function FundingScreen({ navigation }: FundingScreenProps) {
                 setShowTransactionStatus(false);
                 // Refresh on cancel to show current state
                 void loadBalances(false);
-              }
+              },
             },
             {
               text: 'Open Web Faucet',
@@ -284,7 +283,7 @@ export function FundingScreen({ navigation }: FundingScreenProps) {
             onPress: () => {
               // Refresh on cancel to show current state
               void loadBalances(false);
-            }
+            },
           },
           {
             text: 'Open SPL Faucet',

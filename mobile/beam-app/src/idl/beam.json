@@ -193,6 +193,58 @@
       "args": []
     },
     {
+      "name": "migrate_escrow",
+      "docs": [
+        "Migrate old escrow account (107 bytes) to new format (127 bytes)",
+        "This is a one-time migration for accounts created before fraud fields were added"
+      ],
+      "discriminator": [
+        65,
+        111,
+        186,
+        119,
+        58,
+        11,
+        81,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "escrow_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "report_fraudulent_bundle",
       "docs": [
         "Report conflicting bundle evidence to initiate a fraud dispute"
@@ -221,6 +273,29 @@
                   110,
                   99,
                   101
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
+        },
+        {
+          "name": "escrow_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
                 ]
               },
               {
@@ -536,6 +611,19 @@
       ]
     },
     {
+      "name": "FraudPenaltyApplied",
+      "discriminator": [
+        124,
+        139,
+        238,
+        145,
+        246,
+        113,
+        146,
+        253
+      ]
+    },
+    {
       "name": "PaymentSettled",
       "discriminator": [
         158,
@@ -624,6 +712,11 @@
       "code": 6014,
       "name": "Underflow",
       "msg": "Arithmetic underflow"
+    },
+    {
+      "code": 6015,
+      "name": "InsufficientFundsForSlash",
+      "msg": "Insufficient funds for slash penalty"
     }
   ],
   "types": [
@@ -839,6 +932,30 @@
       }
     },
     {
+      "name": "FraudPenaltyApplied",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payer",
+            "type": "pubkey"
+          },
+          {
+            "name": "slashed_amount",
+            "type": "u64"
+          },
+          {
+            "name": "new_reputation",
+            "type": "u16"
+          },
+          {
+            "name": "fraud_count",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
       "name": "FraudReason",
       "type": {
         "kind": "enum",
@@ -984,6 +1101,18 @@
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "stake_locked",
+            "type": "u64"
+          },
+          {
+            "name": "fraud_count",
+            "type": "u32"
+          },
+          {
+            "name": "last_fraud_timestamp",
+            "type": "i64"
           }
         ]
       }

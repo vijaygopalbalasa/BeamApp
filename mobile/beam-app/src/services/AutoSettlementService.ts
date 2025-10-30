@@ -155,7 +155,7 @@ class AutoSettlementService {
           bundle.nonce,
           'payer'
         );
-        console.log(`[AutoSettlement] ✅ Payer attestation fetched`);
+        console.log('[AutoSettlement] ✅ Payer attestation fetched');
 
         // Update stored bundle with attestation
         await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.ATTESTED, {
@@ -169,7 +169,7 @@ class AutoSettlementService {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[AutoSettlement] Failed to fetch payer attestation:`, message);
+        console.error('[AutoSettlement] Failed to fetch payer attestation:', message);
         throw new Error(`Payer attestation failed: ${message}`);
       }
     }
@@ -186,7 +186,7 @@ class AutoSettlementService {
           bundle.nonce,
           'merchant'
         );
-        console.log(`[AutoSettlement] ✅ Merchant attestation fetched`);
+        console.log('[AutoSettlement] ✅ Merchant attestation fetched');
 
         await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.ATTESTED, {
           merchantAttestation: finalMerchantAttestation,
@@ -198,7 +198,7 @@ class AutoSettlementService {
           message: 'Merchant attestation fetched',
         });
       } catch (err) {
-        console.warn(`[AutoSettlement] Merchant attestation unavailable (optional):`, err);
+        console.warn('[AutoSettlement] Merchant attestation unavailable (optional):', err);
         // Continue without merchant attestation
       }
     }
@@ -217,31 +217,51 @@ class AutoSettlementService {
     });
 
     try {
-      const result = await this.settlementService.settleOfflinePayment(
-        bundle,
-        finalPayerAttestation,
-        finalMerchantAttestation
-      );
-
-      if (result.success && result.signature) {
-        console.log(`[AutoSettlement] ✅ Settlement successful! Signature: ${result.signature}`);
-
-        await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.SETTLED, {
-          signature: result.signature,
-          settledAt: Date.now(),
-        });
-
-        this.notifyListeners({
-          type: 'settlement_success',
-          bundleId: bundle.tx_id,
-          message: `Settled: ${result.signature}`,
-        });
-      } else {
-        throw new Error(result.error || 'Settlement failed without error message');
+      // Get wallet signer
+      const signer = await wallet.getSigner();
+      if (!signer) {
+        throw new Error('Wallet signer not available');
       }
+
+      // Get stored bundle metadata
+      const stored = await bundleTransactionManager.getBundle(bundle.tx_id);
+      if (!stored) {
+        throw new Error('Bundle not found in storage');
+      }
+
+      // Create attested bundle input for settlement
+      const attestedBundle = {
+        bundle,
+        payerAttestation: finalPayerAttestation,
+        merchantAttestation: finalMerchantAttestation,
+        metadata: stored.metadata || {
+          amount: bundle.token.amount,
+          currency: bundle.token.symbol,
+          merchantPubkey: bundle.merchant_pubkey,
+          payerPubkey: bundle.payer_pubkey,
+          nonce: bundle.nonce,
+          createdAt: bundle.timestamp,
+        },
+      };
+
+      // Use settleBundleOnchain instead of the non-existent settleOfflinePayment
+      const result = await this.settlementService.settleBundleOnchain(attestedBundle, signer);
+
+      console.log(`[AutoSettlement] ✅ Settlement successful! Signature: ${result.signature}`);
+
+      await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.SETTLED, {
+        signature: result.signature,
+        settledAt: Date.now(),
+      });
+
+      this.notifyListeners({
+        type: 'settlement_success',
+        bundleId: bundle.tx_id,
+        message: `Settled: ${result.signature}`,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`[AutoSettlement] ❌ Settlement failed:`, message);
+      console.error('[AutoSettlement] ❌ Settlement failed:', message);
 
       await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.FAILED, {
         error: message,

@@ -237,6 +237,29 @@ export type Beam = {
           }
         },
         {
+          "name": "escrowAccount",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "payer"
+              }
+            ]
+          }
+        },
+        {
           "name": "payer"
         },
         {
@@ -542,6 +565,19 @@ export type Beam = {
       ]
     },
     {
+      "name": "fraudPenaltyApplied",
+      "discriminator": [
+        124,
+        139,
+        238,
+        145,
+        246,
+        113,
+        146,
+        253
+      ]
+    },
+    {
       "name": "paymentSettled",
       "discriminator": [
         158,
@@ -630,6 +666,11 @@ export type Beam = {
       "code": 6014,
       "name": "underflow",
       "msg": "Arithmetic underflow"
+    },
+    {
+      "code": 6015,
+      "name": "insufficientFundsForSlash",
+      "msg": "Insufficient funds for slash penalty"
     }
   ],
   "types": [
@@ -845,6 +886,30 @@ export type Beam = {
       }
     },
     {
+      "name": "fraudPenaltyApplied",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "payer",
+            "type": "pubkey"
+          },
+          {
+            "name": "slashedAmount",
+            "type": "u64"
+          },
+          {
+            "name": "newReputation",
+            "type": "u16"
+          },
+          {
+            "name": "fraudCount",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
       "name": "fraudReason",
       "type": {
         "kind": "enum",
@@ -990,6 +1055,18 @@ export type Beam = {
           {
             "name": "bump",
             "type": "u8"
+          },
+          {
+            "name": "stakeLocked",
+            "type": "u64"
+          },
+          {
+            "name": "fraudCount",
+            "type": "u32"
+          },
+          {
+            "name": "lastFraudTimestamp",
+            "type": "i64"
           }
         ]
       }

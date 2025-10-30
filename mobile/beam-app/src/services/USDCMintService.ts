@@ -170,7 +170,7 @@ class USDCMintService {
         this.connection,
         {
           publicKey: appWallet,
-          secretKey: new Uint8Array() // We'll sign separately
+          secretKey: new Uint8Array(), // We'll sign separately
         } as any, // Temporary workaround for typing
         this.mintAuthority.publicKey, // mint authority
         null, // freeze authority (none)

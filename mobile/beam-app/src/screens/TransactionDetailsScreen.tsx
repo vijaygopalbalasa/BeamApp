@@ -24,7 +24,7 @@ export function TransactionDetailsScreen({ route, navigation }: Props) {
 
   if (!tx) {
     return (
-      <Screen header={<Hero title="Transaction" subtitle="Loading…" />}></Screen>
+      <Screen header={<Hero title="Transaction" subtitle="Loading…" />} />
     );
   }
 
@@ -41,7 +41,7 @@ export function TransactionDetailsScreen({ route, navigation }: Props) {
         <Card style={styles.card}>
           <HeadingM>{tx.direction === 'in' ? 'Payment received' : 'Payment sent'}</HeadingM>
           <Body style={styles.amount}>{tx.direction === 'in' ? '+' : '-'}{tx.amount.toFixed(2)} USDC</Body>
-          <View style={styles.kv}> 
+          <View style={styles.kv}>
             <Micro>COUNTERPARTY</Micro>
             <Body selectable>{tx.counterparty}</Body>
           </View>

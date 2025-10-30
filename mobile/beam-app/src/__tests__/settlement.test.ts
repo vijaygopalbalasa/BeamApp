@@ -11,9 +11,8 @@
  */
 
 import { PublicKey, Keypair } from '@solana/web3.js';
-import { BeamProgramClient } from '../solana/BeamProgram';
 import { SettlementService } from '../services/SettlementService';
-import type { OfflineBundle, AttestationEnvelope } from '@beam/shared';
+import type { OfflineBundle } from '@beam/shared';
 import { computeBundleHash } from '@beam/shared';
 import type { BeamSigner } from '../wallet/WalletManager';
 
@@ -38,7 +37,7 @@ describe('Settlement Flow - Attestation Verification', () => {
 
     mockSigner = {
       publicKey: payerKeypair.publicKey,
-      sign: jest.fn(async (message: Uint8Array) => {
+      sign: jest.fn(async (_message: Uint8Array) => {
         return new Uint8Array(64); // Mock signature
       }),
     };
@@ -64,6 +63,7 @@ describe('Settlement Flow - Attestation Verification', () => {
       expect(amount).toBeGreaterThan(0);
       expect(nonce).toBeGreaterThan(0);
       expect(attestationNonce.length).toBe(32);
+      expect(timestamp).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
     });
 
     it('should validate 32-byte attestation nonce', () => {
@@ -110,6 +110,7 @@ describe('Settlement Flow - Attestation Verification', () => {
 
       // This would fail because attemptedNonce is NOT > escrowLastNonce
       expect(attemptedNonce).toBeLessThanOrEqual(escrowLastNonce);
+      expect(registryLastNonce).toBeLessThan(escrowLastNonce);
     });
 
     it('should handle nonce overflow safely', () => {
@@ -184,7 +185,7 @@ describe('Settlement Flow - Attestation Verification', () => {
       const withMerchant = { payerProof: {}, merchantProof: {} };
       const withoutMerchant = { payerProof: {}, merchantProof: undefined };
 
-      expect(withMerchant.merchantProof).toBeDruthy();
+      expect(withMerchant.merchantProof).toBeTruthy();
       expect(withoutMerchant.merchantProof).toBeUndefined();
     });
 
@@ -453,6 +454,7 @@ describe('Settlement Service Integration', () => {
     const service = new SettlementService();
     const timeout = 5000; // 5 seconds for connectivity check
 
+    expect(typeof service.settleAllPending).toBe('function');
     expect(timeout).toBe(5000);
   });
 

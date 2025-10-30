@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import EncryptedStorage from 'react-native-encrypted-storage';
 import type { OfflineBundle } from '@beam/shared';
 
 const BUNDLES_KEY = '@beam:pending_bundles';
@@ -36,14 +36,14 @@ export class BundleStorage {
   async saveBundles(bundles: OfflineBundle[]): Promise<void> {
     const serializable = bundles.map(encodeBundle);
     const json = JSON.stringify(serializable);
-    await AsyncStorage.setItem(BUNDLES_KEY, json);
+    await EncryptedStorage.setItem(BUNDLES_KEY, json);
   }
 
   /**
    * Load pending bundles from storage
    */
   async loadBundles(): Promise<OfflineBundle[]> {
-    const json = await AsyncStorage.getItem(BUNDLES_KEY);
+    const json = await EncryptedStorage.getItem(BUNDLES_KEY);
     if (!json) {
       return [];
     }
@@ -55,7 +55,7 @@ export class BundleStorage {
       if (__DEV__) {
         console.error('Failed to parse stored bundles:', err);
       }
-      await AsyncStorage.removeItem(BUNDLES_KEY);
+      await EncryptedStorage.removeItem(BUNDLES_KEY);
       return [];
     }
   }
@@ -82,7 +82,7 @@ export class BundleStorage {
    * Clear all bundles
    */
   async clearBundles(): Promise<void> {
-    await AsyncStorage.removeItem(BUNDLES_KEY);
+    await EncryptedStorage.removeItem(BUNDLES_KEY);
   }
 
   /**
@@ -121,14 +121,14 @@ export class BundleStorage {
    * Save current nonce
    */
   async saveNonce(nonce: number): Promise<void> {
-    await AsyncStorage.setItem(NONCE_KEY, nonce.toString());
+    await EncryptedStorage.setItem(NONCE_KEY, nonce.toString());
   }
 
   /**
    * Load current nonce
    */
   async loadNonce(): Promise<number> {
-    const nonce = await AsyncStorage.getItem(NONCE_KEY);
+    const nonce = await EncryptedStorage.getItem(NONCE_KEY);
     return nonce ? parseInt(nonce, 10) : 0;
   }
 

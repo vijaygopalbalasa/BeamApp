@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, TextInput, StyleSheet, Alert, ScrollView, Share } from 'react-native';
 import { Screen } from '../components/ui/Screen';
 import { Card } from '../components/ui/Card';
@@ -95,12 +95,12 @@ export function SettingsScreen({ navigation }: SettingsProps) {
     }
   };
 
-  const useEndpoint = async (url: string) => {
+  const handleUseEndpoint = useCallback(async (url: string) => {
     connectionService.setRpcOverride(url);
     await AsyncStorage.setItem('@beam:rpc_override', url);
     setCurrentRpc(url);
     Alert.alert('RPC Updated', `Now using ${url}`);
-  };
+  }, []);
 
   const resetEndpoint = async () => {
     connectionService.setRpcOverride(null);
@@ -189,7 +189,7 @@ export function SettingsScreen({ navigation }: SettingsProps) {
             <View key={url} style={styles.row}>
               <Small style={{ flex: 1, color: 'rgba(148,163,184,0.9)' }}>{url}</Small>
               <Small style={{ width: 80, textAlign: 'right', color: ms === Infinity ? '#ef4444' : undefined }}>{ms === Infinity ? 'timeout' : `${ms} ms`}</Small>
-              <Button label="Use" variant="secondary" onPress={() => useEndpoint(url)} />
+              <Button label="Use" variant="secondary" onPress={() => handleUseEndpoint(url)} />
             </View>
           ))}
           {latencies.length > 0 ? (
@@ -197,8 +197,8 @@ export function SettingsScreen({ navigation }: SettingsProps) {
               label="Use fastest endpoint"
               variant="secondary"
               onPress={() => {
-                const best = latencies.filter(l => isFinite(l.ms)).sort((a,b) => a.ms - b.ms)[0];
-                if (best) useEndpoint(best.url);
+                const best = latencies.filter(l => isFinite(l.ms)).sort((a, b) => a.ms - b.ms)[0];
+                if (best) handleUseEndpoint(best.url);
                 else Alert.alert('No fast endpoint', 'All tested endpoints timed out');
               }}
             />

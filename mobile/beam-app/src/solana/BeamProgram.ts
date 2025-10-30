@@ -76,8 +76,8 @@
  * 6. WithdrawEscrow: Withdraw unused funds
  */
 
-import { Connection, PublicKey, Transaction, SystemProgram, TransactionInstruction, Commitment } from '@solana/web3.js';
-import { Program, AnchorProvider, BN, Idl } from '@coral-xyz/anchor';
+import { Connection, PublicKey, Transaction, SystemProgram, Commitment } from '@solana/web3.js';
+import { Program, AnchorProvider, Idl } from '@coral-xyz/anchor';
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 import BeamIDL from '../idl/beam.json';
@@ -106,8 +106,8 @@ interface AttestationProofArgs {
 }
 
 interface SettlementEvidenceArgs {
-  payerProof: AttestationProofArgs;
-  merchantProof?: AttestationProofArgs;
+  payerProof: AttestationProofArgs | null;  // Allow null for online payments
+  merchantProof?: AttestationProofArgs | null;
 }
 
 /**
@@ -381,13 +381,13 @@ export class BeamProgramClient {
     const out: number[] = [];
     let rem = length;
     while (true) {
-      let elem = rem & 0x7f;
-      rem >>= 7;
+      const elem = rem % 0x80;
+      rem = Math.floor(rem / 0x80);
       if (rem === 0) {
         out.push(elem);
         break;
       } else {
-        out.push(elem | 0x80);
+        out.push(elem + 0x80);
       }
     }
     return Uint8Array.from(out);
@@ -504,12 +504,53 @@ export class BeamProgramClient {
 
       // bump: u8 (1 byte)
       const bump = data.readUInt8(offset);
+      offset += 1;
 
-      console.log('[BeamProgram] ✅ Escrow deserialized successfully:', {
-        owner: ownerPubkey.toBase58(),
-        escrowBalance,
-        lastNonce,
-      });
+      // BACKWARDS COMPATIBILITY: Fraud fields were added later
+      // Old accounts (107 bytes): No fraud fields
+      // New accounts (127 bytes): Has fraud fields (20 bytes)
+      let stakeLocked = 0;
+      let fraudCount = 0;
+      let lastFraudTimestamp = 0;
+      let needsMigration = false;
+
+      const expectedOldSize = 8 + 32 + 32 + 8 + 8 + 2 + 8 + 8 + 1; // 107 bytes (old)
+      const expectedNewSize = expectedOldSize + 8 + 4 + 8; // 127 bytes (new, +20 bytes)
+
+      if (data.length >= expectedNewSize) {
+        // New account with fraud fields
+        stakeLocked = Number(data.readBigUInt64LE(offset));
+        offset += 8;
+
+        fraudCount = data.readUInt32LE(offset);
+        offset += 4;
+
+        lastFraudTimestamp = Number(data.readBigInt64LE(offset));
+        needsMigration = false;
+
+        console.log('[BeamProgram] ✅ Escrow deserialized (NEW FORMAT with fraud fields):', {
+          owner: ownerPubkey.toBase58(),
+          escrowBalance,
+          lastNonce,
+          stakeLocked,
+          fraudCount,
+        });
+      } else if (data.length >= expectedOldSize) {
+        // Old account without fraud fields - NEEDS MIGRATION!
+        needsMigration = true;
+        console.log('[BeamProgram] ⚠️  Escrow deserialized (OLD FORMAT, no fraud fields):', {
+          owner: ownerPubkey.toBase58(),
+          escrowBalance,
+          lastNonce,
+          needsMigration: true,
+          note: 'Account created before fraud fields were added - MIGRATION REQUIRED',
+        });
+      } else {
+        console.error('[BeamProgram] ❌ Account data size mismatch:', {
+          expected: `${expectedOldSize} (old) or ${expectedNewSize} (new)`,
+          actual: data.length,
+        });
+      }
 
       return {
         address: escrowPDA,
@@ -521,6 +562,10 @@ export class BeamProgramClient {
         totalSpent,
         createdAt,
         bump,
+        stakeLocked,
+        fraudCount,
+        lastFraudTimestamp,
+        needsMigration,
       };
     } catch (err) {
       console.error('[BeamProgram] ❌ Error fetching escrow account:', err);
@@ -835,7 +880,7 @@ export class BeamProgramClient {
     bundleId: string,
     evidence: SettlementEvidenceArgs
   ): Promise<string> {
-    if (!this.signer || !this.program) {
+    if (!this.signer) {
       throw new Error('Signer required for write operations');
     }
 
@@ -979,6 +1024,68 @@ export class BeamProgramClient {
       console.error('Error funding escrow:', err);
       throw new Error(`Failed to fund escrow: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Migrate old escrow account (107 bytes) to new format (127 bytes)
+   * This is needed for accounts created before fraud fields were added
+   */
+  async migrateEscrow(): Promise<string> {
+    if (!this.signer) {
+      throw new Error('Signer required for write operations');
+    }
+
+    try {
+      const ownerPubkey = this.signer.publicKey;
+      const [escrowPDA] = this.findEscrowPDA(ownerPubkey);
+
+      console.log('[BeamProgram] Building migrateEscrow instruction...');
+      const instruction = this.buildMigrateEscrowInstruction(
+        escrowPDA,
+        ownerPubkey
+      );
+
+      // Build and sign transaction
+      const txSignature = await this.signAndBroadcast(
+        ownerPubkey,
+        [instruction],
+        'Migrate Escrow Account',
+      );
+
+      console.log('[BeamProgram] ✅ Escrow migrated successfully!', txSignature);
+      return txSignature;
+    } catch (err) {
+      console.error('[BeamProgram] Error migrating escrow:', err);
+      throw new Error(`Failed to migrate escrow: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Manually builds migrateEscrow instruction
+   *
+   * Instruction format:
+   * - Discriminator (8 bytes): [65, 111, 186, 119, 58, 11, 81, 209]
+   * - No additional arguments
+   */
+  private buildMigrateEscrowInstruction(
+    escrowAccount: PublicKey,
+    owner: PublicKey
+  ): RawInstruction {
+    // Instruction discriminator from IDL (migrate_escrow)
+    const discriminator = Buffer.from([65, 111, 186, 119, 58, 11, 81, 209]);
+
+    // Build accounts array according to IDL order
+    const keys = [
+      { pubkey: escrowAccount, isSigner: false, isWritable: true },  // escrow_account (PDA, writable, realloc)
+      { pubkey: owner, isSigner: true, isWritable: true },           // owner (signer, writable, payer for realloc)
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+    ];
+
+    return {
+      keys,
+      programId: PROGRAM_ID,
+      data: discriminator, // No additional data needed
+    };
   }
 
   /**
@@ -1140,14 +1247,23 @@ export class BeamProgramClient {
         return null;
       }
 
-      // Use program if available, otherwise create temp program
-      let programToUse = this.program;
-      if (!programToUse) {
-        const Program = require('@coral-xyz/anchor').Program;
-        programToUse = new Program(BeamIDL as Idl, { connection: this.connection } as any, PROGRAM_ID);
+      // CRITICAL FIX: Do not use Anchor Program in React Native/Hermes
+      // Anchor's .fetch() method uses BufferLayout which causes "Cannot read property 'size' of undefined"
+      // If we don't have a program (signer-less mode), we can't deserialize complex accounts yet
+      // TODO: Implement manual deserialization for NonceRegistry if needed
+      if (!this.program) {
+        console.log('[BeamProgram] getNonceRegistry: No program available (read-only mode), skipping fetch');
+        console.log('[BeamProgram] Returning minimal NonceRegistry with account data length');
+        // Return a basic structure with default values to avoid blocking
+        return {
+          owner,
+          lastNonce: 0,
+          bundleHistory: [],
+          fraudRecords: [],
+        };
       }
 
-      const account = await (programToUse as any).account.nonceRegistry.fetch(noncePda);
+      const account = await (this.program as any).account.nonceRegistry.fetch(noncePda);
       return {
         owner: account.owner,
         lastNonce: account.lastNonce.toNumber(),
@@ -1270,7 +1386,7 @@ export class BeamProgramClient {
 
   private formatEvidence(evidence: SettlementEvidenceArgs) {
     return {
-      payerProof: this.formatProof(evidence.payerProof),
+      payerProof: evidence.payerProof ? this.formatProof(evidence.payerProof) : null,
       merchantProof: evidence.merchantProof ? this.formatProof(evidence.merchantProof) : null,
     };
   }

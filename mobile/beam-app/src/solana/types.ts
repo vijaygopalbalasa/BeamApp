@@ -13,6 +13,12 @@ export interface EscrowAccount {
   totalSpent: number;
   createdAt: number;
   bump: number;
+  // Phase 1.3: Fraud detection fields (added later)
+  stakeLocked: number;
+  fraudCount: number;
+  lastFraudTimestamp: number;
+  // Migration metadata
+  needsMigration?: boolean; // True if account is old 107-byte format
 }
 
 export type FraudReason = 'duplicateBundle' | 'invalidAttestation' | 'other';

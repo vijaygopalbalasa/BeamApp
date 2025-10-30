@@ -29,8 +29,8 @@ describe('WalletManager', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // Reset wallet state
-    wallet['publicKey'] = null;
-    wallet['currentNonce'] = 0;
+    wallet.publicKey = null;
+    wallet.currentNonce = 0;
   });
 
   describe('createWallet', () => {

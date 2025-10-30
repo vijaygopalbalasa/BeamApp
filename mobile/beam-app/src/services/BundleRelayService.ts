@@ -24,7 +24,6 @@ import { attestationService, type AttestedBundle } from './AttestationService';
 import { SettlementService } from './SettlementService';
 import { encodeOfflineBundle, decodeOfflineBundle, type PersistedOfflineBundle } from '../storage/BundleStorage';
 import { serializeBundle, type OfflineBundle, type AttestationEnvelope } from '@beam/shared';
-import { wallet } from '../wallet/WalletManager';
 import { Buffer } from 'buffer';
 
 const UPLOAD_INTERVAL_MS = 30_000; // 30 seconds
@@ -262,12 +261,12 @@ export class BundleRelayService {
     this.updateDiagnostics({ lastUploadAt: now });
 
     try {
-      const attested = await attestationService.loadBundles();
+      const attestedBundles = await attestationService.loadBundles();
 
       // Filter bundles that:
       // 1. Are created by this payer
       // 2. Are missing merchant signature (need to be relayed)
-      const needRelay = attested.filter(
+      const needRelay = attestedBundles.filter(
         a =>
           a.bundle.payer_pubkey === payerPubkey &&
           (!a.bundle.merchant_signature || a.bundle.merchant_signature.length === 0)
@@ -282,13 +281,13 @@ export class BundleRelayService {
 
       let uploadedCount = 0;
 
-      for (const attested of needRelay) {
+      for (const attestedBundle of needRelay) {
         try {
-          await this.uploadBundle(attested);
+          await this.uploadBundle(attestedBundle);
           uploadedCount++;
         } catch (err) {
           if (__DEV__) {
-            console.error(`[BundleRelay] Failed to upload ${attested.bundle.tx_id}:`, err);
+            console.error(`[BundleRelay] Failed to upload ${attestedBundle.bundle.tx_id}:`, err);
           }
           // Continue with next bundle
         }

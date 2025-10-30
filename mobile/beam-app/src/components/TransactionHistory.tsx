@@ -4,7 +4,7 @@ import { Card } from './ui/Card';
 import { Section } from './ui/Section';
 import { HeadingM, Body, Small } from './ui/Typography';
 import { StatusBadge } from './ui/StatusBadge';
-import { palette, spacing, radius } from '../design/tokens';
+import { palette, spacing } from '../design/tokens';
 import type { BundleHistoryEntry } from '../solana/types';
 
 interface TransactionHistoryProps {

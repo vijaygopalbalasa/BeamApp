@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import EncryptedStorage from 'react-native-encrypted-storage';
 import type { OfflineBundle, AttestationEnvelope } from '@beam/shared';
-import { bundleStorage, type PersistedOfflineBundle, encodeOfflineBundle, decodeOfflineBundle } from './BundleStorage';
+import { bundleStorage } from './BundleStorage';
 import { attestationService } from '../services/AttestationService';
+import { attestationQueue } from '../services/AttestationQueue';
 import type { BundleMetadata } from '../native/SecureStorageBridge';
 
 const TRANSACTION_LOG_KEY = '@beam:transaction_log';
@@ -146,7 +148,6 @@ class BundleTransactionManager {
 
             // Queue for background retry when online
             try {
-              const { attestationQueue } = await import('../services/AttestationQueue');
               await attestationQueue.queueBundle(bundle.tx_id);
               console.log('[BundleTransactionManager] Attestation queued for retry');
             } catch (queueError) {
@@ -230,9 +231,9 @@ class BundleTransactionManager {
           },
         });
 
-        // Save to merchant's AsyncStorage
+        // Save to merchant's EncryptedStorage
         const MERCHANT_RECEIVED_KEY = '@beam:merchant_received';
-        const json = await AsyncStorage.getItem(MERCHANT_RECEIVED_KEY);
+        const json = await EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY);
         const payments: OfflineBundle[] = json ? JSON.parse(json) : [];
 
         // Check for duplicates
@@ -241,7 +242,7 @@ class BundleTransactionManager {
         }
 
         payments.unshift(bundle);
-        await AsyncStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(payments));
+        await EncryptedStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(payments));
 
         await this.writeTransactionLog({
           transactionId: txId,
@@ -371,8 +372,8 @@ class BundleTransactionManager {
 
       // Remove from all storages
       await Promise.all([
-        bundleStorage.removeBundle(txId).catch(() => {}),
-        attestationService.removeBundle(txId).catch(() => {}),
+        bundleStorage.removeBundle(txId).catch(() => { }),
+        attestationService.removeBundle(txId).catch(() => { }),
       ]);
 
       await this.writeTransactionLog({
@@ -410,14 +411,14 @@ class BundleTransactionManager {
       });
 
       const MERCHANT_RECEIVED_KEY = '@beam:merchant_received';
-      const json = await AsyncStorage.getItem(MERCHANT_RECEIVED_KEY);
+      const json = await EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY);
       if (json) {
         const payments: OfflineBundle[] = JSON.parse(json);
         const filtered = payments.filter(p => p.tx_id !== txId);
-        await AsyncStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(filtered));
+        await EncryptedStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(filtered));
       }
 
-      await attestationService.removeBundle(txId).catch(() => {});
+      await attestationService.removeBundle(txId).catch(() => { });
 
       await this.writeTransactionLog({
         transactionId: txId,
@@ -440,7 +441,7 @@ class BundleTransactionManager {
    */
   async getTransactionState(txId: string): Promise<BundleTransaction | null> {
     const key = `${TRANSACTION_STATE_KEY}:${txId}`;
-    const json = await AsyncStorage.getItem(key);
+    const json = await EncryptedStorage.getItem(key);
     if (!json) {
       return null;
     }
@@ -460,7 +461,7 @@ class BundleTransactionManager {
    * Get all transactions
    */
   async getAllTransactions(): Promise<BundleTransaction[]> {
-    const keys = await AsyncStorage.getAllKeys();
+    const keys = await EncryptedStorage.getAllKeys();
     const stateKeys = keys.filter(key => key.startsWith(TRANSACTION_STATE_KEY));
 
     const transactions = await Promise.all(
@@ -564,8 +565,8 @@ class BundleTransactionManager {
 
       // Remove from all storages (best effort)
       await Promise.all([
-        bundleStorage.removeBundle(txId).catch(() => {}),
-        attestationService.removeBundle(txId).catch(() => {}),
+        bundleStorage.removeBundle(txId).catch(() => { }),
+        attestationService.removeBundle(txId).catch(() => { }),
       ]);
 
       // Update transaction state to failed
@@ -602,15 +603,15 @@ class BundleTransactionManager {
 
       // Remove from merchant storage
       const MERCHANT_RECEIVED_KEY = '@beam:merchant_received';
-      const json = await AsyncStorage.getItem(MERCHANT_RECEIVED_KEY);
+      const json = await EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY);
       if (json) {
         const payments: OfflineBundle[] = JSON.parse(json);
         const filtered = payments.filter(p => p.tx_id !== txId);
-        await AsyncStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(filtered));
+        await EncryptedStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(filtered));
       }
 
       // Remove from secure storage
-      await attestationService.removeBundle(txId).catch(() => {});
+      await attestationService.removeBundle(txId).catch(() => { });
 
       // Update transaction state to failed
       const transaction = await this.getTransactionState(txId);
@@ -660,7 +661,7 @@ class BundleTransactionManager {
    */
   private async saveTransactionState(transaction: BundleTransaction): Promise<void> {
     const key = `${TRANSACTION_STATE_KEY}:${transaction.id}`;
-    await AsyncStorage.setItem(key, JSON.stringify(transaction));
+    await EncryptedStorage.setItem(key, JSON.stringify(transaction));
   }
 
   /**
@@ -668,7 +669,7 @@ class BundleTransactionManager {
    */
   private async deleteTransactionState(txId: string): Promise<void> {
     const key = `${TRANSACTION_STATE_KEY}:${txId}`;
-    await AsyncStorage.removeItem(key);
+    await EncryptedStorage.removeItem(key);
   }
 
   /**
@@ -677,7 +678,7 @@ class BundleTransactionManager {
   private async waitForLock(txId: string): Promise<void> {
     const existingLock = this.transactionLock.get(txId);
     if (existingLock) {
-      await existingLock.catch(() => {}); // Ignore errors from previous operation
+      await existingLock.catch(() => { }); // Ignore errors from previous operation
     }
   }
 
@@ -693,7 +694,7 @@ class BundleTransactionManager {
       }
     })();
 
-    this.transactionLock.set(txId, promise.then(() => {}, () => {}));
+    this.transactionLock.set(txId, promise.then(() => { }, () => { }));
     return promise;
   }
 

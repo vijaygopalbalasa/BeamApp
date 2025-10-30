@@ -7,7 +7,7 @@ import { TransactionCard } from '../components/features/TransactionCard';
 import { transactionHistory, type TransactionItem } from '../services/TransactionHistoryService';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Skeleton } from '../components/ui/Skeleton';
-import { palette, spacing } from '../design/tokens';
+import { spacing } from '../design/tokens';
 
 interface Props { navigation: { navigate: (screen: string, params?: any) => void } }
 
@@ -29,7 +29,7 @@ export function TransactionsScreen({ navigation }: Props) {
       <Card style={styles.card}>
         {loading ? (
           <View>
-            {[0,1,2,3].map(i => (
+            {[0, 1, 2, 3].map(i => (
               <View key={i} style={{ paddingVertical: 12 }}>
                 <Skeleton height={20} width={'60%'} />
                 <Skeleton height={14} width={'40%'} style={{ marginTop: 6 }} />

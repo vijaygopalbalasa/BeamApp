@@ -4,7 +4,7 @@ import { Screen } from '../components/ui/Screen';
 import { Hero } from '../components/ui/Hero';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { HeadingM, Body, Small } from '../components/ui/Typography';
+import { Body } from '../components/ui/Typography';
 import { palette, spacing, radius } from '../design/tokens';
 import { QRCodeView } from '../components/ui/QRCodeView';
 import { wallet } from '../wallet/WalletManager';

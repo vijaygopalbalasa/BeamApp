@@ -35,7 +35,7 @@ export const SOLANA_FALLBACK_RPCS = (process.env.SOLANA_FALLBACK_RPCS || '')
 // =============================================================================
 // Play Integrity & Attestation Configuration
 // =============================================================================
-export const VERIFIER_ALLOW_DEV = true; // TEMP: Force dev mode until Play Integrity is configured
+export const VERIFIER_ALLOW_DEV = process.env.DEV_MODE === 'true' || process.env.VERIFIER_ALLOW_DEV === 'true';
 export const VERIFIER_JWKS_URL = process.env.VERIFIER_JWKS_URL || 'https://www.googleapis.com/androidcheck/v1/attestation/publicKey';
 export const VERIFIER_JWKS_PATH = process.env.VERIFIER_JWKS_PATH;
 export const VERIFIER_EXPECT_PACKAGE = process.env.VERIFIER_EXPECTED_PACKAGE_NAME;
@@ -46,8 +46,6 @@ export const VERIFIER_ALLOWED_DIGEST = (process.env.VERIFIER_ALLOWED_DIGESTS || 
 // =============================================================================
 // Signing Key Configuration
 // =============================================================================
-const DEFAULT_SIGNING_KEY_HEX = '4207d5ec7f1a93f73f083ef709dacafbaea919a62e63842708a09627dc93ab00';
-
 function loadSigningKey(): Uint8Array {
   const raw = process.env.VERIFIER_SIGNING_KEY;
   const parsed = parseSigningKey(raw ?? '');
@@ -55,10 +53,13 @@ function loadSigningKey(): Uint8Array {
     return parsed;
   }
 
-  // Tolerant fallback: never crash the function on missing key.
-  // Use a default dev key with loud warnings. Replace with a real key ASAP.
-  console.warn('[verifier] VERIFIER_SIGNING_KEY missing or invalid. Using default development key (DO NOT USE IN PRODUCTION).');
-  return Uint8Array.from(Buffer.from(DEFAULT_SIGNING_KEY_HEX, 'hex'));
+  // SECURITY: Fail fast in production if signing key is missing
+  // Never fall back to a default key - this would be a critical security vulnerability
+  throw new Error(
+    'CRITICAL: VERIFIER_SIGNING_KEY environment variable must be set. ' +
+    'Generate a new key with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))" ' +
+    'and set it in your Vercel environment variables.'
+  );
 }
 
 export const VERIFIER_SIGNING_KEY = loadSigningKey();

@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, StyleSheet, Alert, ScrollView } from 'react-native';
+import { StyleSheet, Alert, ScrollView, TextInput } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Screen } from '../components/ui/Screen';
 import { Hero } from '../components/ui/Hero';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Input } from '../components/ui/Input';
 import { HeadingM, Body, Small } from '../components/ui/Typography';
 import { palette, spacing, radius } from '../design/tokens';
 import { wallet } from '../wallet/WalletManager';
@@ -101,9 +101,10 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
       return;
     }
     try {
-      const { default: AsyncStorage } = await import('@react-native-async-storage/async-storage');
       await AsyncStorage.setItem('@beam:wallet_backed_up', 'true');
-    } catch {}
+    } catch (error) {
+      console.error('[WalletBackup] Failed to persist backup status', error);
+    }
     navigation.navigate('Funding');
   };
 
@@ -128,23 +129,35 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
             Your wallet backup will be encrypted with a passphrase. Choose a strong, memorable passphrase that you'll never forget.
           </Body>
           <Small style={styles.hint}>✓ At least 8 characters{'\n'}✓ Mix letters, numbers, and symbols{'\n'}✓ Don't use common words</Small>
-          <Input
-            label="Enter Passphrase"
+          <Small style={styles.label}>Enter Passphrase</Small>
+          <TextInput
             placeholder="e.g., MySecure$Wallet2024"
+            placeholderTextColor="rgba(148,163,184,0.5)"
             secureTextEntry
             value={pass1}
             onChangeText={setPass1}
-            helperText="Type a strong passphrase"
+            style={styles.input}
           />
-          <Input
-            label="Confirm Passphrase"
+          <Small style={styles.hint}>Type a strong passphrase</Small>
+
+          <Small style={styles.label}>Confirm Passphrase</Small>
+          <TextInput
             placeholder="Type the same passphrase again"
+            placeholderTextColor="rgba(148,163,184,0.5)"
             secureTextEntry
             value={pass2}
             onChangeText={setPass2}
-            error={pass2.length > 0 && pass1 !== pass2 ? 'Passphrases do not match' : undefined}
-            helperText={pass2.length > 0 && pass1 === pass2 ? '✓ Passphrases match' : 'Re-enter to confirm'}
+            style={styles.input}
           />
+          {pass2.length > 0 && pass1 !== pass2 && (
+            <Small style={styles.errorText}>Passphrases do not match</Small>
+          )}
+          {pass2.length > 0 && pass1 === pass2 && (
+            <Small style={styles.successText}>✓ Passphrases match</Small>
+          )}
+          {pass2.length === 0 && (
+            <Small style={styles.hint}>Re-enter to confirm</Small>
+          )}
           <Button label={busy ? 'Creating Backup…' : 'Generate Backup'} onPress={generateBackup} disabled={busy} />
         </Card>
 
@@ -159,11 +172,10 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
               {'\n'}• Secure cloud storage
               {'\n\n'}⚠️ You need BOTH the backup text AND your passphrase to restore your wallet.
             </Body>
-            <Input
+            <TextInput
               multiline
               value={backup}
               editable={false}
-              containerStyle={styles.inputContainer}
               style={styles.multiline}
             />
             <Button label="📋 Copy to Clipboard" onPress={copyToClipboard} />
@@ -213,9 +225,34 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     color: palette.textPrimary,
   },
-  inputContainer: { width: '100%' },
+  input: {
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.25)',
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: palette.textPrimary,
+    backgroundColor: 'rgba(2,6,23,0.6)',
+    fontSize: 16,
+  },
   multiline: {
     minHeight: 120,
     textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.25)',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    color: palette.textPrimary,
+    backgroundColor: 'rgba(2,6,23,0.6)',
+    fontFamily: 'Menlo',
+    fontSize: 11,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 12,
+  },
+  successText: {
+    color: '#10b981',
+    fontSize: 12,
   },
 });

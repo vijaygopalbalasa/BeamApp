@@ -90,7 +90,7 @@ class FaucetService {
       // Check if it's a network error
       if (message.includes('fetch') || message.includes('network') || message.includes('timeout')) {
         throw new UsdcFaucetError(
-          `Network error: Unable to reach verifier service. Please check your connection.`,
+          'Network error: Unable to reach verifier service. Please check your connection.',
           undefined,
           false,
           true

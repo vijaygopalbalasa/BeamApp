@@ -114,7 +114,7 @@ export const Config = {
     skipPreflight: networkConfig.skipPreflight,
     maxRetries: networkConfig.maxRetries,
     // Rate limiting awareness (adjust based on your RPC provider)
-    rateLimitPerSecond: process.env.RPC_RATE_LIMIT ? parseInt(process.env.RPC_RATE_LIMIT) : 50,
+    rateLimitPerSecond: process.env.RPC_RATE_LIMIT ? parseInt(process.env.RPC_RATE_LIMIT, 10) : 50,
   },
 
   // Beam Program Configuration

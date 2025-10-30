@@ -15,6 +15,14 @@ ios/Pods/
 .env.local
 *.pem
 
+# CRITICAL: Keypairs and Secrets (NEVER commit these!)
+*authority*.json
+*keypair*.json
+*-keypair.json
+scripts/usdc-mint-authority.json
+verifier/scripts/usdc-mint-authority.json
+program/scripts/*-keypair.json
+
 # IDEs
 .vscode/
 .idea/
@@ -45,3 +53,11 @@ test-ledger/
 
 # Misc
 *.orig
+
+# Scripts folder (contains sensitive deployment scripts)
+scripts/
+
+# Sensitive configuration
+verifier/.env
+verifier/.env.*
+!verifier/.env.template

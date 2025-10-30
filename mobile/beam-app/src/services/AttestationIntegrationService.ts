@@ -90,6 +90,10 @@ export class AttestationIntegrationService {
           osVersion: deviceInfo.osVersion || 'unknown',
           securityLevel: deviceInfo.securityLevel ?? 'SOFTWARE',
         },
+        payer: bundle.payer_pubkey,
+        merchant: bundle.merchant_pubkey,
+        amount: bundle.token.amount,
+        nonce: bundle.nonce,
       });
 
       console.log('[AttestationIntegration] ✅ Attestation envelope received');
@@ -141,7 +145,7 @@ export class AttestationIntegrationService {
 
     try {
       // Get device ID for fraud reporting
-      const deviceId = await playIntegrityService.getDeviceId();
+      await playIntegrityService.getDeviceId();
 
       // Generate device token for this fraud report
       const rand = new Uint8Array(32);

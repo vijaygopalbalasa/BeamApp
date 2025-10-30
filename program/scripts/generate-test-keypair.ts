@@ -9,13 +9,13 @@ async function main() {
   console.log("Test Keypair Generated:");
   console.log("======================");
   console.log("\nPrivate Key (hex):");
-  console.log(Buffer.from(privateKey).toString('hex'));
+  console.log(Buffer.from(privateKey).toString("hex"));
   console.log("\nPrivate Key (bytes array for TypeScript):");
-  console.log(`[${Array.from(privateKey).join(', ')}]`);
+  console.log(`[${Array.from(privateKey).join(", ")}]`);
   console.log("\nPublic Key (hex):");
-  console.log(Buffer.from(publicKey).toString('hex'));
+  console.log(Buffer.from(publicKey).toString("hex"));
   console.log("\nPublic Key (bytes array for Rust):");
-  console.log(`[${Array.from(publicKey).join(', ')}]`);
+  console.log(`[${Array.from(publicKey).join(", ")}]`);
 }
 
 main().catch(console.error);

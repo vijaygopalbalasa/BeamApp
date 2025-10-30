@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, StyleSheet } from 'react-native';
 import { Screen } from '../components/ui/Screen';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -11,7 +11,6 @@ import { PublicKey } from '@solana/web3.js';
 import { connectionService } from '../services/ConnectionService';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getUseServerSettlement } from '../utils/flags';
 import { Config } from '../config';
 import { BeamProgramClient } from '../solana/BeamProgram';
 import { BalanceCard } from '../components/features/BalanceCard';
@@ -36,38 +35,11 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   const [escrowExists, setEscrowExists] = useState<boolean>(false);
   const [loading, setLoading] = useState(true);
   const [health, setHealth] = useState<{ rpc: boolean; program: boolean }>({ rpc: false, program: false });
-  const [backedUp, setBackedUp] = useState<boolean>(false);
+  const [, setBackedUp] = useState<boolean>(false);
   const [healthUpdatedAt, setHealthUpdatedAt] = useState<number>(0);
   const [balancesUpdatedAt, setBalancesUpdatedAt] = useState<number>(0);
   const [recent, setRecent] = useState<TransactionItem[]>([]);
   const [recentLoading, setRecentLoading] = useState<boolean>(true);
-
-  const ensureWallet = useCallback(async (): Promise<string | null> => {
-    console.log('[HomeScreen] ensureWallet called');
-    try {
-      console.log('[HomeScreen] Checking for existing wallet...');
-      const existing = wallet.getPublicKey();
-      if (existing) {
-        const address = existing.toBase58();
-        console.log('[HomeScreen] ✅ Found existing wallet:', address);
-        setWalletAddress(address);
-        return address;
-      }
-      console.log('[HomeScreen] No existing wallet, loading...');
-      const pubkey = await wallet.loadWallet();
-      if (pubkey) {
-        const address = pubkey.toBase58();
-        console.log('[HomeScreen] ✅ Wallet loaded:', address);
-        setWalletAddress(address);
-        return address;
-      } else {
-        console.log('[HomeScreen] ❌ wallet.loadWallet() returned null');
-      }
-    } catch (error) {
-      console.error('[HomeScreen] ❌ Failed to ensure wallet', error);
-    }
-    return null;
-  }, []);
 
   const loadBalances = useCallback(async () => {
     console.log('[HomeScreen] ========== loadBalances CALLED ==========');
@@ -80,7 +52,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       let address = walletAddress;
       if (!address) {
         console.log('[HomeScreen] No address in state, loading wallet...');
-        const pubkey = await wallet.loadWallet();
+        const pubkey = wallet.getPublicKey() || await wallet.loadWallet();
         if (pubkey) {
           address = pubkey.toBase58();
           console.log('[HomeScreen] Wallet loaded, address:', address);
@@ -128,8 +100,6 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       // Try to get escrow balance
       try {
         console.log('[HomeScreen] Attempting to fetch escrow balance...');
-        const { BeamProgramClient } = require('../solana/BeamProgram');
-
         // Use existing connection from connectionService to avoid initialization issues
         const existingConnection = connectionService.getConnection();
         console.log('[HomeScreen] Got connection from connectionService');
@@ -202,7 +172,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       setLoading(false);
       console.log('[HomeScreen] ========== loadBalances COMPLETED ==========');
     }
-  }, [walletAddress]);
+  }, [walletAddress, escrowBalance]);
 
   // Removed useEffect - useFocusEffect already handles initial load and subsequent focus events
 
@@ -283,7 +253,7 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
           <View>
             {recentLoading ? (
               <View>
-                {[0,1,2].map(i => (
+                {[0, 1, 2].map(i => (
                   <View key={i} style={{ paddingVertical: 12 }}>
                     <Skeleton height={20} width={'60%'} />
                     <Skeleton height={14} width={'40%'} style={{ marginTop: 6 }} />

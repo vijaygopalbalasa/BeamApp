@@ -13,9 +13,6 @@ export interface TransactionItem {
   status: TxStatus;
 }
 
-function shorten(pk: string, head = 4, tail = 4): string {
-  return pk.length > head + tail ? `${pk.slice(0, head)}…${pk.slice(-tail)}` : pk;
-}
 
 export class TransactionHistoryService {
   async loadAll(): Promise<TransactionItem[]> {

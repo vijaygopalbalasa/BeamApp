@@ -312,7 +312,7 @@ class Logger {
    * Send to error tracking service
    * TODO: Implement integration with Sentry, Bugsnag, or similar
    */
-  private sendToErrorTracking(entry: LogEntry): void {
+  private sendToErrorTracking(_entry: LogEntry): void {
     // Placeholder for error tracking integration
     // In production, this would send to Sentry, Bugsnag, etc.
 

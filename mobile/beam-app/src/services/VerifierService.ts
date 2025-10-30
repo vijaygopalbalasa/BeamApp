@@ -20,6 +20,10 @@ export interface AttestationRequest {
     osVersion: string;
     securityLevel: 'STRONGBOX' | 'TEE' | 'SOFTWARE';
   };
+  payer: string;
+  merchant: string;
+  amount: number;
+  nonce: number;
 }
 
 export interface AttestationEnvelope {

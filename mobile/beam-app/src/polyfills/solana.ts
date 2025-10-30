@@ -9,23 +9,23 @@ import { TextDecoder, TextEncoder } from 'text-encoding';
 import { Crypto } from '@peculiar/webcrypto';
 
 declare global {
-  // eslint-disable-next-line no-var
+
   var Buffer: typeof Buffer | undefined;
-  // eslint-disable-next-line no-var
+
   var process: typeof process | undefined;
-  // eslint-disable-next-line no-var
+
   var structuredClone: (<T>(value: T) => T) | undefined;
-  // eslint-disable-next-line no-var
+
   var TextEncoder: typeof TextEncoder | undefined;
-  // eslint-disable-next-line no-var
+
   var TextDecoder: typeof TextDecoder | undefined;
-  // eslint-disable-next-line no-var
+
   var crypto: Crypto | undefined;
-  // eslint-disable-next-line no-var
+
   var atob: undefined | ((data: string) => string);
-  // eslint-disable-next-line no-var
+
   var btoa: undefined | ((data: string) => string);
-  // eslint-disable-next-line no-var
+
   var setImmediate: ((handler: (...args: any[]) => void, ...args: any[]) => number) | undefined;
 }
 
@@ -103,7 +103,7 @@ try {
           const spans: Record<string, number> = {
             u8: 1, u16: 2, u32: 4, u64: 8,
             s8: 1, s16: 2, s32: 4, s64: 8,
-            f32: 4, f64: 8
+            f32: 4, f64: 8,
           };
           instance.span = spans[type] || 0;
         }

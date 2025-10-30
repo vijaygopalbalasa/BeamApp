@@ -4,7 +4,7 @@
  * Displays device security level and verifier backend health status
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import { playIntegrityService } from '../services/PlayIntegrityService';
 import { attestationIntegration } from '../services/AttestationIntegrationService';
@@ -28,11 +28,7 @@ export const SecurityStatusCard: React.FC<SecurityStatusCardProps> = ({ onStatus
   } | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadSecurityStatus();
-  }, []);
-
-  const loadSecurityStatus = async () => {
+  const loadSecurityStatus = useCallback(async () => {
     setLoading(true);
 
     try {
@@ -72,7 +68,11 @@ export const SecurityStatusCard: React.FC<SecurityStatusCardProps> = ({ onStatus
     } finally {
       setLoading(false);
     }
-  };
+  }, [onStatusChange]);
+
+  useEffect(() => {
+    loadSecurityStatus();
+  }, [loadSecurityStatus]);
 
   if (loading) {
     return (

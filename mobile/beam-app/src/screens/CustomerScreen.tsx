@@ -1,20 +1,20 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, StyleSheet, Alert, ActivityIndicator, Modal, RefreshControl, TextInput, PermissionsAndroid, Platform, Image } from 'react-native';
+import { View, StyleSheet, Alert, ActivityIndicator, Modal, RefreshControl, TextInput } from 'react-native';
 import { wallet } from '../wallet/WalletManager';
-import { createUnsignedBundle, serializeBundle, type AttestationEnvelope } from '@beam/shared';
+import { createUnsignedBundle, serializeBundle } from '@beam/shared';
 import type { OfflineBundle } from '@beam/shared';
 import { SettlementService } from '../services/SettlementService';
-import { bundleStorage, encodeOfflineBundle } from '../storage/BundleStorage';
-import { bundleTransactionManager, BundleState } from '../storage/BundleTransactionManager';
+import { bundleStorage } from '../storage/BundleStorage';
 import { PublicKey } from '@solana/web3.js';
 import { QRScanner } from '../components/QRScanner';
 import { Config } from '../config';
 import { BeamProgramClient } from '../solana/BeamProgram';
 import { attestationService } from '../services/AttestationService';
-import { attestationIntegration } from '../services/AttestationIntegrationService';
 import { bleDirect } from '../services/BLEDirectService';
 import { autoSettlementService } from '../services/AutoSettlementService';
 import { networkService } from '../services/NetworkService';
+import { bleConnectionManager } from '../services/BLEConnectionManager';
 import { Screen } from '../components/ui/Screen';
 import { Hero } from '../components/ui/Hero';
 import { Card } from '../components/ui/Card';
@@ -28,10 +28,10 @@ import { MeshNetworkStatus } from '../components/MeshNetworkStatus';
 import { SecurityStatusCard } from '../components/SecurityStatusCard';
 import { TransactionHistory } from '../components/TransactionHistory';
 import { PaymentFlowAnimation, type PaymentStage } from '../components/PaymentFlowAnimation';
+import { BLEConnectionModal } from '../components/BLEConnectionModal';
+import { TransactionSuccessModal } from '../components/TransactionSuccessModal';
 import { palette, radius, spacing } from '../design/tokens';
 import type { BundleHistoryEntry, FraudRecordEntry } from '../solana/types';
-import QRCode from 'react-native-qrcode-svg';
-import QRCodeGenerator from '../native/QRCodeGenerator';
 import { Buffer } from 'buffer';
 import NetInfo from '@react-native-community/netinfo';
 
@@ -54,7 +54,7 @@ export function CustomerScreen() {
       }
     });
     return Array.from(seen.values());
-  }, [normalizeBundles]);
+  }, []);
 
   const [pendingBundles, setPendingBundles] = useState<OfflineBundle[]>([]);
   const [isOnline, setIsOnline] = useState(false);
@@ -65,18 +65,14 @@ export function CustomerScreen() {
   const [fraudRecords, setFraudRecords] = useState<FraudRecordEntry[]>([]);
   const [meshDiag, setMeshDiag] = useState(bleDirect.getDiagnostics());
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const [sharePayload, setSharePayload] = useState<string | null>(null);
-  const [shareQRImageBase64, setShareQRImageBase64] = useState<string | null>(null);
-  const [shareMetadata, setShareMetadata] = useState<{ amount: number; merchant: string } | null>(null);
-  const [shareModalVisible, setShareModalVisible] = useState(false);
   const [paymentStage, setPaymentStage] = useState<PaymentStage | null>(null);
   const [paymentMessage, setPaymentMessage] = useState<string>('');
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [paySheetVisible, setPaySheetVisible] = useState(false);
-  const [paySheetStage, setPaySheetStage] = useState<'review'|'submitting'|'confirming'|'done'|'error'>('review');
+  const [paySheetStage, setPaySheetStage] = useState<'review' | 'submitting' | 'confirming' | 'done' | 'error'>('review');
   const [paySheetProgress, setPaySheetProgress] = useState(0);
   const payConfirmRef = useRef<null | (() => Promise<void>)>(null);
-  
+
   const [pendingPayInfo, setPendingPayInfo] = useState<{ merchant: string; description: string } | null>(null);
   const meshUnsubscribe = useRef<(() => void) | null>(null);
   const [showEscrowModal, setShowEscrowModal] = useState(false);
@@ -85,64 +81,23 @@ export function CustomerScreen() {
   const [escrowExists, setEscrowExists] = useState(false);
   const [settlementStatus, setSettlementStatus] = useState<string>('');
 
-  const encodeAttestationForShare = useCallback((envelope?: AttestationEnvelope | null) => {
-    if (!envelope) {
-      return undefined;
-    }
+  // NEW: BLE Connection Modal State
+  const [bleConnectionModal, setBleConnectionModal] = useState<{
+    visible: boolean;
+    status: 'searching' | 'connecting' | 'connected' | 'failed';
+    peerName?: string;
+  }>({ visible: false, status: 'searching' });
 
-    return {
-      bundleId: envelope.bundleId,
-      timestamp: envelope.timestamp,
-      nonce: Buffer.from(envelope.nonce).toString('base64'),
-      attestationReport: Buffer.from(envelope.attestationReport).toString('base64'),
-      signature: Buffer.from(envelope.signature).toString('base64'),
-      certificateChain: envelope.certificateChain.map(entry => Buffer.from(entry).toString('base64')),
-      deviceInfo: envelope.deviceInfo,
-    };
-  }, []);
+  // NEW: Transaction Success Modal State
+  const [txSuccessModal, setTxSuccessModal] = useState<{
+    visible: boolean;
+    type: 'online' | 'offline' | 'settled';
+    amount: number;
+    signature?: string;
+    bundleId?: string;
+  }>({ visible: false, type: 'online', amount: 0 });
 
-  const prepareSharePayload = useCallback(
-    async (bundle: OfflineBundle, attestation?: AttestationEnvelope | null) => {
-      let payerEnvelope: AttestationEnvelope | null | undefined = attestation;
 
-      if (!payerEnvelope) {
-        try {
-          const storedBundles = await attestationService.loadBundles();
-          const record = storedBundles.find(item => item.bundle.tx_id === bundle.tx_id);
-          payerEnvelope = record?.payerAttestation;
-        } catch (err) {
-          if (__DEV__) {
-            console.warn('Failed to retrieve attestation for bundle', bundle.tx_id, err);
-          }
-        }
-      }
-
-      const payload = {
-        type: 'beam_bundle',
-        bundle: encodeOfflineBundle(bundle),
-        payerAttestation: encodeAttestationForShare(payerEnvelope ?? undefined),
-      };
-
-      const payloadString = JSON.stringify(payload);
-      setSharePayload(payloadString);
-      setShareMetadata({ amount: bundle.token.amount, merchant: bundle.merchant_pubkey });
-
-      // Generate ZXing QR code
-      try {
-        console.log('[CustomerScreen] Generating bundle QR with ZXing...');
-        const base64Image = await QRCodeGenerator.generate(payloadString, 400);
-        console.log('[CustomerScreen] ✅ Bundle QR generated successfully');
-        setShareQRImageBase64(base64Image);
-      } catch (err) {
-        console.error('[CustomerScreen] ❌ Failed to generate bundle QR with ZXing:', err);
-        Alert.alert('Error', 'Failed to generate QR code for bundle');
-        return;
-      }
-
-      setShareModalVisible(true);
-    },
-    [encodeAttestationForShare]
-  );
 
   const loadData = useCallback(async () => {
     console.log('[CustomerScreen] ========== loadData CALLED ==========');
@@ -285,7 +240,7 @@ export function CustomerScreen() {
       setRefreshing(false);
       console.log('[CustomerScreen] ========== loadData COMPLETED ==========');
     }
-  }, []);
+  }, [normalizeBundles]);
 
   useEffect(() => {
     void loadData();
@@ -339,12 +294,41 @@ export function CustomerScreen() {
     return unsubscribe;
   }, [loadData]);
 
+  // Setup BLE ACK listener for connection status
+  useEffect(() => {
+    const unsubscribe = bleDirect.addAckListener(event => {
+      console.log('[CustomerScreen] BLE ACK event:', event);
+      switch (event.type) {
+        case 'ack':
+          setSettlementStatus(`✅ Merchant confirmed payment ${event.bundleId.slice(0, 8)}...`);
+          Alert.alert(
+            'Merchant Confirmed! ✅',
+            `Merchant has confirmed receipt of payment ${event.bundleId.slice(0, 8)}...\n\nPayment will settle automatically when online.`,
+            [{ text: 'OK' }]
+          );
+          break;
+        case 'nack':
+          setSettlementStatus(`❌ Merchant rejected payment: ${event.reason}`);
+          Alert.alert(
+            'Payment Rejected',
+            `Merchant rejected the payment: ${event.reason || 'Unknown reason'}`,
+            [{ text: 'OK' }]
+          );
+          break;
+        case 'timeout':
+          setSettlementStatus(`⏱️ No response from merchant for ${event.bundleId.slice(0, 8)}...`);
+          break;
+      }
+    });
+    return unsubscribe;
+  }, []);
+
   useEffect(() => {
     meshUnsubscribe.current?.();
     meshUnsubscribe.current = null;
 
     if (!walletAddress) {
-      return () => {};
+      return () => { };
     }
 
     let cancelled = false;
@@ -426,7 +410,7 @@ export function CustomerScreen() {
       meshUnsubscribe.current?.();
       meshUnsubscribe.current = null;
     };
-  }, [walletAddress]);
+  }, [walletAddress, normalizeBundles]);
 
   const handleQRScan = async (qrData: string) => {
     console.log('[CustomerScreen] ========== handleQRScan CALLED ==========');
@@ -558,210 +542,187 @@ export function CustomerScreen() {
     }
     console.log('[CustomerScreen] ✅ Payer pubkey:', payerPubkey.toBase58());
 
-    // Ensure Bluetooth runtime permissions (Android)
-    const ensureBlePermissions = async (): Promise<boolean> => {
-      if (Platform.OS !== 'android') return true;
-      try {
-        if (Platform.Version >= 31) {
-          const granted = await PermissionsAndroid.requestMultiple([
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          ]);
-          const ok =
-            granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-            granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED &&
-            granted['android.permission.BLUETOOTH_ADVERTISE'] === PermissionsAndroid.RESULTS.GRANTED &&
-            granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
-          return ok;
-        } else {
-          const granted = await PermissionsAndroid.request(
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-          );
-          return granted === PermissionsAndroid.RESULTS.GRANTED;
-        }
-      } catch (e) {
-        if (__DEV__) console.warn('[CustomerScreen] BLE permission request failed', e);
-        return false;
-      }
-    };
+    // Check if we have INTERNET connectivity (not just Bluetooth)
+    const networkState = await NetInfo.fetch();
+    // Only consider WiFi or Cellular as "online" - NOT Bluetooth
+    const hasInternet = networkState.isConnected &&
+                       (networkState.type === 'wifi' || networkState.type === 'cellular');
+    console.log('[CustomerScreen] Network type:', networkState.type);
+    console.log('[CustomerScreen] Internet status:', hasInternet ? 'ONLINE' : 'OFFLINE');
 
-    // Auto-enable BLE direct (no prompt). If it fails, we fall back to QR.
+    // Convert USDC to smallest unit (6 decimals)
+    const amountInSmallestUnit = Math.floor(amount * 1_000_000);
+    setPaymentAmount(amount);
+
     try {
-      const ok = await ensureBlePermissions();
-      if (ok) {
-        await bleDirect.ensureActive(Config.ble.serviceUUID);
+      // ===== NEW: PROPER ONLINE/OFFLINE ROUTING =====
+      if (hasInternet) {
+        // ONLINE: Direct on-chain settlement (skip BLE)
+        console.log('[CustomerScreen] 🌐 Using ONLINE flow - direct settlement');
+        await createOnlinePayment(merchantPubkey, amountInSmallestUnit, description);
       } else {
-        console.log('[CustomerScreen] BLE permissions not granted; will fall back to QR');
+        // OFFLINE: BLE payment with connection confirmation
+        console.log('[CustomerScreen] 📡 Using OFFLINE BLE flow');
+        await createOfflinePayment(merchantPubkey, amountInSmallestUnit, description);
       }
-    } catch (e) {
-      console.log('[CustomerScreen] BLE ensureActive failed; will fall back to QR', e);
+    } catch (err) {
+      console.error('[CustomerScreen] ========== createPayment FAILED ==========');
+      console.error('[CustomerScreen] Error:', err);
+      throw err;
     }
+  };
+
+  const createOnlinePayment = async (
+    merchantPubkey: string,
+    amountInSmallestUnit: number,
+    description: string
+  ) => {
+    console.log('[CustomerScreen] 🌐 ONLINE PAYMENT FLOW STARTED');
+
+    const payerPubkey = wallet.getPublicKey();
+    if (!payerPubkey) throw new Error('Wallet not loaded');
+
+    // Stage 1: Creating transaction
+    setPaymentStage('creating');
+    setPaymentMessage('Creating on-chain transaction...');
 
     try {
-      // Convert USDC to smallest unit (6 decimals)
-      const amountInSmallestUnit = Math.floor(amount * 1_000_000);
-      setPaymentAmount(amount);
+      // Get signer for on-chain transaction
+      const signer = await wallet.getSigner('Authorize online payment');
+      if (!signer) throw new Error('Failed to get wallet signer');
 
-      // ===== CRITICAL: CHECK IF ONLINE - IF YES, SETTLE DIRECTLY ON-CHAIN =====
-      const currentNetworkState = await NetInfo.fetch();
-      const isOnline = !!currentNetworkState.isConnected &&
-        (currentNetworkState.isInternetReachable === null ? true : !!currentNetworkState.isInternetReachable);
+      // Initialize settlement service
+      settlementService.initializeClient(signer);
 
-      if (isOnline) {
-        console.log('[CustomerScreen] 🌐 Device is online - attempting direct on-chain settlement');
-        console.log('[CustomerScreen] This will transfer USDC from customer escrow to merchant immediately');
+      // Check if escrow needs migration (old 107-byte format)
+      const beamClient = new BeamProgramClient(Config.solana.rpcUrl, signer);
+      const escrowAccount = await beamClient.getEscrowAccount(payerPubkey);
+
+      if (escrowAccount?.needsMigration) {
+        console.log('[CustomerScreen] ⚠️  Escrow needs migration from old format');
+        setPaymentMessage('Upgrading escrow account...');
 
         try {
-          setPaymentStage('creating');
-          setPaymentMessage('Preparing Solana transaction...');
-
-          // Get nonce for on-chain transaction
-          const nonce = await bundleStorage.incrementNonce();
-          wallet.setNonce(nonce);
-          console.log('[CustomerScreen] ✅ Nonce:', nonce);
-
-          // Create minimal bundle for settlement
-          const escrowPDA = PublicKey.findProgramAddressSync(
-            [Buffer.from('escrow'), payerPubkey.toBuffer()],
-            new PublicKey(Config.program.id)
-          )[0].toBase58();
-
-          const unsignedBundle = createUnsignedBundle(
-            escrowPDA,
-            payerPubkey.toBase58(),
-            merchantPubkey,
-            amountInSmallestUnit,
-            Config.tokens.usdc.mint,
-            Config.tokens.usdc.decimals,
-            nonce
-          );
-
-          // Sign bundle
-          const serialized = serializeBundle(unsignedBundle);
-          const payerSignature = await attestationService.signPayload(serialized, 'Authorize payment');
-          const bundle = {
-            ...unsignedBundle,
-            payer_signature: payerSignature,
-          };
-
-          console.log('[CustomerScreen] ✅ Bundle created and signed:', bundle.tx_id);
-
-          // Try to get attestation (optional for online payments)
-          setPaymentMessage('Getting security attestation...');
-          let attestationEnvelope: AttestationEnvelope | null = null;
-          try {
-            const attestationData = await attestationIntegration.createAttestation(bundle);
-            attestationEnvelope = {
-              bundleId: bundle.tx_id,
-              timestamp: bundle.timestamp,
-              nonce: Buffer.from(attestationData.nonce, 'base64'),
-              attestationReport: Buffer.from(attestationData.attestationReport, 'base64'),
-              signature: Buffer.from(attestationData.signature, 'base64'),
-              certificateChain: attestationData.certificateChain.map(cert => Buffer.from(cert, 'base64')),
-              deviceInfo: {
-                ...attestationData.deviceInfo,
-                manufacturer: '',
-                securityPatch: '',
-                platform: 'android' as const,
-              },
-            };
-            console.log('[CustomerScreen] ✅ Attestation obtained');
-          } catch (attestError) {
-            console.warn('[CustomerScreen] ⚠️ Attestation failed, proceeding without:', attestError);
-          }
-
-          // Settle directly on Solana
-          setPaymentMessage('Submitting to blockchain...');
-          console.log('[CustomerScreen] 📡 Calling settleOfflinePayment on Solana devnet...');
-
-          const beamClient = new BeamProgramClient(
-            Config.solana.rpcUrl[0],
-            wallet.asSigner()
-          );
-
-          // Prepare settlement evidence
-          const evidence: any = {
-            payerProof: attestationEnvelope ? {
-              attestationRoot: Array.from(attestationEnvelope.nonce),
-              attestationNonce: Array.from(attestationEnvelope.nonce),
-              attestationTimestamp: attestationEnvelope.timestamp,
-              verifierSignature: Array.from(attestationEnvelope.signature),
-            } : null,
-            merchantProof: null,
-          };
-
-          const txSignature = await beamClient.settleOfflinePayment(
-            new PublicKey(merchantPubkey),
-            amountInSmallestUnit,
-            nonce,
-            bundle.tx_id,
-            evidence
-          );
-
-          console.log('[CustomerScreen] ✅✅✅ PAYMENT SETTLED ON-CHAIN!');
-          console.log('[CustomerScreen] Transaction signature:', txSignature);
-          console.log('[CustomerScreen] View on explorer: https://explorer.solana.com/tx/' + txSignature + '?cluster=devnet');
-
-          // Wait for confirmation
-          setPaymentMessage('Confirming transaction...');
-          await new Promise(resolve => setTimeout(resolve, 2000));
-
-          // Reload balances
-          console.log('[CustomerScreen] Reloading balances to reflect payment...');
-          await loadData();
-
-          // Show success
-          setPaymentStage('success');
-          setPaymentMessage('Payment successful!');
-
-          Alert.alert(
-            '✅ Payment Successful!',
-            `Sent ${amount} USDC to merchant\n\nYour escrow balance has been deducted.\nMerchant will receive funds shortly.\n\nTransaction: ${txSignature.slice(0, 20)}...`,
-            [
-              {
-                text: 'View on Explorer',
-                onPress: () => {
-                  console.log(`Opening: https://explorer.solana.com/tx/${txSignature}?cluster=devnet`);
-                }
-              },
-              { text: 'OK' }
-            ]
-          );
-
-          // Clear animation after user dismisses
-          setTimeout(() => {
-            setPaymentStage(null);
-            setPaymentMessage('');
-          }, 3000);
-
-          console.log('[CustomerScreen] ========== ONLINE PAYMENT COMPLETED ==========');
-          return; // EXIT - payment done!
-
-        } catch (onlineError) {
-          console.error('[CustomerScreen] ❌ Online settlement failed:', onlineError);
-          const errorMsg = onlineError instanceof Error ? onlineError.message : String(onlineError);
-
-          Alert.alert(
-            'Settlement Failed',
-            `Could not settle on-chain: ${errorMsg}\n\nWould you like to create an offline bundle instead?`,
-            [
-              { text: 'Cancel', style: 'cancel', onPress: () => { throw new Error('User cancelled'); } },
-              { text: 'Create Bundle', onPress: () => {} }
-            ]
-          );
-          // Fall through to offline bundle creation
-          console.log('[CustomerScreen] Falling back to offline bundle flow...');
+          const migrationTx = await beamClient.migrateEscrow();
+          console.log('[CustomerScreen] ✅ Migration successful:', migrationTx);
+          setPaymentMessage('Escrow upgraded! Continuing payment...');
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Brief pause to let migration settle
+        } catch (migrationErr) {
+          console.error('[CustomerScreen] ❌ Migration failed:', migrationErr);
+          throw new Error(`Failed to upgrade escrow account: ${migrationErr instanceof Error ? migrationErr.message : String(migrationErr)}`);
         }
       }
 
-      // ===== OFFLINE FLOW (only reached if online settlement failed or device offline) =====
-      console.log('[CustomerScreen] 📴 Creating offline bundle (device offline or settlement failed)...');
+      // Check escrow balance
+      const escrowBalanceRaw = await settlementService.getEscrowBalance(payerPubkey);
+      if (escrowBalanceRaw < amountInSmallestUnit) {
+        throw new Error(`Insufficient escrow balance. Have: ${escrowBalanceRaw}, Need: ${amountInSmallestUnit}`);
+      }
+
+      // Stage 2: Signing
+      setPaymentStage('signing');
+      setPaymentMessage('Signing transaction...');
+
+      // Create and execute direct on-chain settlement
+      const merchantPubkeyObj = new PublicKey(merchantPubkey);
+
+      // Stage 3: Submitting
+      setPaymentStage('broadcasting');
+      setPaymentMessage('Submitting to Solana...');
+
+      // NEW: Direct payment without attestation (program now accepts optional)
+      const signature = await settlementService.settleDirectPaymentOnline(
+        merchantPubkeyObj,
+        amountInSmallestUnit,
+        signer
+      );
+
+      // Stage 4: Success
+      setPaymentStage('success');
+      setPaymentMessage('Payment settled on-chain!');
+
+      // NEW: Show transaction success modal with explorer link
+      setTxSuccessModal({
+        visible: true,
+        type: 'online',
+        amount: amountInSmallestUnit / 1_000_000,
+        signature: signature,
+      });
+
+      // Reload data to update balances
+      await loadData();
+
+    } catch (err) {
+      console.error('[CustomerScreen] ❌ Online payment failed:', err);
+      setPaymentStage('error');
+      setPaymentMessage('Payment failed');
+      throw err;
+    } finally {
+      // Clear animation
+      setTimeout(() => {
+        setPaymentStage(null);
+        setPaymentMessage('');
+      }, 3000);
+    }
+  };
+
+  const createOfflinePayment = async (
+    merchantPubkey: string,
+    amountInSmallestUnit: number,
+    description: string
+  ) => {
+    console.log('[CustomerScreen] 📡 OFFLINE PAYMENT FLOW STARTED');
+
+    const payerPubkey = wallet.getPublicKey();
+    if (!payerPubkey) throw new Error('Wallet not loaded');
+
+    // NEW: Set BLE connection manager role
+    bleConnectionManager.setRole('customer');
+
+    try {
+      // NEW: Step 1 - Wait for BLE connection
+      console.log('[CustomerScreen] Step 1: Waiting for BLE connection...');
+      setBleConnectionModal({ visible: true, status: 'searching' });
+
+      // Start BLE scanning
+      await bleDirect.startBLENode(Config.ble.serviceUUID);
+
+      // Wait for connection with 30 second timeout
+      const isConnected = await bleConnectionManager.waitForConnection(30000);
+
+      if (!isConnected) {
+        console.error('[CustomerScreen] ❌ BLE connection timeout');
+        setBleConnectionModal({ visible: true, status: 'failed' });
+
+        // Wait 2 seconds to show failure message
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        setBleConnectionModal({ visible: false, status: 'searching' });
+
+        throw new Error('Could not connect to merchant via Bluetooth. Please ensure the merchant device is nearby with Bluetooth enabled.');
+      }
+
+      // Show connection success
+      const connState = bleConnectionManager.getConnectionState();
+      console.log('[CustomerScreen] ✅ BLE connected to:', connState.peerName);
+      setBleConnectionModal({
+        visible: true,
+        status: 'connected',
+        peerName: connState.peerName || 'Merchant'
+      });
+
+      // Wait for user to confirm connection
+      // REMOVED: Auto-close timeout - user must tap "Continue" button
+      // The modal's "onConfirm" callback will close it and continue payment
+
+      // NEW: Step 2 - Check escrow balance before creating bundle
+      console.log('[CustomerScreen] Step 2: Checking escrow balance...');
+      if (escrowBalance < amountInSmallestUnit / 1_000_000) {
+        throw new Error(`Insufficient escrow balance. You have ${escrowBalance.toFixed(2)} USDC but need ${(amountInSmallestUnit / 1_000_000).toFixed(2)} USDC.`);
+      }
 
       // Stage 1: Creating bundle
       setPaymentStage('creating');
-      setPaymentMessage('Creating payment bundle...');
+      setPaymentMessage('Creating offline payment bundle...');
 
       // Get escrow PDA
       const escrowPDA = PublicKey.findProgramAddressSync(
@@ -769,7 +730,7 @@ export function CustomerScreen() {
         new PublicKey(Config.program.id)
       )[0].toBase58();
 
-      const tokenMint = Config.tokens.usdc.mint; // USDC
+      const tokenMint = Config.tokens.usdc.mint;
       const tokenDecimals = Config.tokens.usdc.decimals;
 
       // Get next nonce
@@ -798,229 +759,64 @@ export function CustomerScreen() {
         payer_signature: payerSignature,
       };
 
-      // Phase 1.4: Hybrid attestation model
-      // Try to generate attestation immediately if online, otherwise queue for later
-      let hardwareAttestation: AttestationEnvelope | null = null;
-      const networkState = await NetInfo.fetch();
+      // Store bundle locally before sending
+      await bundleStorage.saveBundle(bundle);
 
-      if (networkState.isConnected) {
-        try {
-          console.log('[CustomerScreen] Online - attempting immediate attestation...');
-          const attestationData = await attestationIntegration.createAttestation(bundle);
-          hardwareAttestation = {
-            bundleId: bundle.tx_id,
-            timestamp: bundle.timestamp,
-            nonce: Buffer.from(attestationData.nonce, 'base64'),
-            attestationReport: Buffer.from(attestationData.attestationReport, 'base64'),
-            signature: Buffer.from(attestationData.signature, 'base64'),
-            certificateChain: attestationData.certificateChain.map(cert => Buffer.from(cert, 'base64')),
-            deviceInfo: {
-              ...attestationData.deviceInfo,
-              manufacturer: '',
-              securityPatch: '',
-              platform: 'android' as const,
-            },
-          };
-          console.log('[CustomerScreen] ✅ Hardware attestation created immediately');
-        } catch (error) {
-          console.error('[CustomerScreen] ⚠️ Immediate attestation failed, will queue:', error);
-          // Queue for later - don't block payment
-          const { attestationQueue } = require('../services/AttestationQueue');
-          await attestationQueue.queueBundle(bundle.tx_id);
-          console.log('[CustomerScreen] Attestation queued for when online');
-        }
-      } else {
-        console.log('[CustomerScreen] Offline - queueing attestation for later');
-        const { attestationQueue } = require('../services/AttestationQueue');
-        await attestationQueue.queueBundle(bundle.tx_id);
-      }
-
-      // Use BundleTransactionManager for atomic storage
-      const metadata = {
-        amount: amountInSmallestUnit,
-        currency: 'USDC',
-        merchantPubkey,
-        payerPubkey: payerPubkey.toBase58(),
-        nonce,
-        createdAt: bundle.timestamp,
-      };
-
-      let transaction;
-      try {
-        transaction = await bundleTransactionManager.createBundle({
-          bundle,
-          metadata,
-          selfRole: 'payer',
-          payerAttestation: hardwareAttestation || undefined,
-          skipAttestation: !networkState.isConnected,  // Skip attestation when offline
-        });
-
-        if (__DEV__) {
-          console.log(`Bundle created with transaction state: ${transaction.state}`);
-        }
-      } catch (err) {
-        // Bundle creation failed - transaction was rolled back
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        throw new Error(`Failed to create payment: ${errorMessage}`);
-      }
-
-      // Stage 3: Broadcasting
+      // Stage 3: BLE Broadcasting
       setPaymentStage('broadcasting');
-      setPaymentMessage('Broadcasting to mesh network...');
+      setPaymentMessage('Sending payment via Bluetooth...');
 
-      // Check BLE mesh status before broadcasting
-      const preBroadcastDiag = bleDirect.getDiagnostics();
-      console.log('[CustomerScreen] 📡 BLE Mesh Status BEFORE broadcast:');
-      console.log('  - Mesh Started:', preBroadcastDiag.started);
-      console.log('  - Service UUID:', preBroadcastDiag.serviceUuid);
-      console.log('  - Queue Length:', preBroadcastDiag.queueLength);
-      console.log('  - Last Success:', preBroadcastDiag.lastSuccessAt ? new Date(preBroadcastDiag.lastSuccessAt).toISOString() : 'Never');
+      // Send via BLE immediately (device is already connected)
+      const result = await bleDirect.broadcastBundle(
+        bundle,
+        Config.ble.serviceUUID,
+        undefined, // No attestation for offline
+        undefined
+      );
 
-      // Attempt immediate BLE broadcast; fall back to queue + QR if none reached
-      let peersReached = 0;
-      let ackUnsub: (() => void) | null = null;
-      try {
-        // Listen for ACK/NACK for this bundle
-        ackUnsub = bleDirect.addAckListener(ev => {
-          if (ev.bundleId === bundle.tx_id) {
-            if (ev.type === 'ack') {
-              console.log('[CustomerScreen] ✅ ACK received for bundle:', bundle.tx_id);
-              setPaymentStage('success');
-              setPaymentMessage('Merchant received your payment');
-              Alert.alert('Payment delivered', 'Merchant received your payment via Bluetooth');
-            } else if (ev.type === 'nack') {
-              console.log('[CustomerScreen] ❌ NACK received for bundle:', bundle.tx_id, 'reason:', ev.reason);
-              setPaymentStage('error');
-              setPaymentMessage('Merchant rejected the payment');
-              Alert.alert('Payment rejected', ev.reason || 'Merchant could not accept');
-            } else if (ev.type === 'timeout') {
-              console.log('[CustomerScreen] ⏱️ ACK timeout for bundle:', bundle.tx_id);
-              setPaymentMessage('No response from merchant; will keep trying');
-            }
-            if (ackUnsub) { ackUnsub(); ackUnsub = null; }
-          }
-        });
-
-        console.log('[CustomerScreen] → Calling broadcastBundle...');
-        const result = await bleDirect.broadcastBundle(
-          bundle,
-          Config.ble.serviceUUID,
-          transaction.payerAttestation || undefined
-        );
-        peersReached = result.peersReached || 0;
-        console.log('[CustomerScreen] ← broadcastBundle result:', {
-          success: result.success,
-          peersReached,
-        });
-
-        if (peersReached === 0) {
-          console.log('[CustomerScreen] ⚠️ No peers reached - queueing for later delivery');
-          // Queue for later retries
-          await bleDirect.queueBundle(
-            bundle,
-            Config.ble.serviceUUID,
-            transaction.payerAttestation || undefined
-          );
-          await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.QUEUED);
-        } else {
-          console.log('[CustomerScreen] ✅ Bundle broadcast successful - reached', peersReached, 'peer(s)');
-        }
-      } catch (err) {
-        console.error('[CustomerScreen] ❌ BLE broadcast error:', err);
-        // Queue on errors as well
-        await bleDirect.queueBundle(
-          bundle,
-          Config.ble.serviceUUID,
-          transaction.payerAttestation || undefined
-        );
-        await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.QUEUED);
-      }
-      finally {
-        if (ackUnsub) { ackUnsub(); }
+      if (!result.success) {
+        console.error('[CustomerScreen] ❌ BLE broadcast failed');
+        throw new Error('Failed to send payment via Bluetooth. The merchant may have disconnected.');
       }
 
-      // Stage 4: Confirming
-      setPaymentStage('confirming');
-      setPaymentMessage('Confirming payment...');
+      console.log('[CustomerScreen] ✅ Payment sent via BLE successfully');
 
-      console.log('[CustomerScreen] Stage 4: Payment bundle created and broadcast via BLE');
-      // NOTE: We do NOT call prepareSharePayload() here automatically
-      // The QR should only be generated if the user manually requests it
-      // (e.g., if BLE fails and they need a backup sharing method)
-
-      // Stage 5: Success
+      // Stage 4: Success
       setPaymentStage('success');
-      setPaymentMessage('Payment created successfully!');
+      setPaymentMessage('Payment sent successfully!');
+
+      // NEW: Update local escrow balance immediately (optimistic update)
+      const newEscrowBalance = escrowBalance - (amountInSmallestUnit / 1_000_000);
+      setEscrowBalance(newEscrowBalance);
+      console.log('[CustomerScreen] ✅ Escrow balance updated locally:', newEscrowBalance);
+
+      // NEW: Show transaction success modal
+      setTxSuccessModal({
+        visible: true,
+        type: 'offline',
+        amount: amountInSmallestUnit / 1_000_000,
+        bundleId: bundle.tx_id,
+      });
 
       // Update UI
-      console.log('[CustomerScreen] Loading bundles to update UI...');
-      try {
-        const bundles = await bundleStorage.loadBundles();
-        setPendingBundles(normalizeBundles(bundles));
-        console.log('[CustomerScreen] ✅ UI updated with pending bundles:', bundles.length);
-      } catch (bundleErr) {
-        console.error('[CustomerScreen] ❌ Failed to load bundles for UI:', bundleErr);
-        // Don't fail - payment is already created
-      }
+      const bundles = await bundleStorage.loadBundles();
+      setPendingBundles(normalizeBundles(bundles));
 
-      // Clear animation after 2 seconds
-      console.log('[CustomerScreen] Setting timeout to clear animation...');
-      setTimeout(() => {
-        try {
-          console.log('[CustomerScreen] Clearing payment animation state');
-          setPaymentStage(null);
-          setPaymentMessage('');
-        } catch (timeoutErr) {
-          console.error('[CustomerScreen] ❌ Error in timeout callback:', timeoutErr);
-        }
-      }, 2000);
-
-      // Get mesh status for success message
-      const meshDiagnostics = bleDirect.getDiagnostics();
-      let meshStatus = '';
-      if (meshDiagnostics.started) {
-        meshStatus = peersReached > 0
-          ? `✅ Delivered via BLE mesh to ${peersReached} device${peersReached===1?'':'s'}`
-          : `⏳ No merchants nearby - queued for delivery (${meshDiagnostics.queueLength} in queue)`;
-      } else {
-        meshStatus = '⚠️ BLE mesh off — use "Show QR" to share with merchant';
-      }
-
-      // Show success message with proper offline/online context
-      const attestationStatus = hardwareAttestation
-        ? '✅ Hardware attestation attached'
-        : '⏳ Attestation queued (will fetch when online)';
-
-      // Use existing networkState variable from earlier (line 583)
-      const networkStatus = networkState.isConnected
-        ? '🌐 Online - ready for settlement'
-        : '✈️ Offline mode - bundle stored locally';
-
-      console.log('[CustomerScreen] Showing success alert...');
-      console.log('[CustomerScreen] Final status:', { peersReached, meshStatus, attestationStatus, networkStatus });
-
-      Alert.alert(
-        'Payment Created! ✅',
-        `${description}\n\nAmount: $${amount.toFixed(2)} USDC\nNonce: ${nonce}\nBundle ID: ${bundle.tx_id.slice(0, 8)}...\n\n${meshStatus}\n\n${attestationStatus}\n\n${networkState.isConnected ? '🌐 Online - Will auto-settle on Solana when merchant confirms' : '📡 Offline - Payment stored locally\n⚡ Auto-settles when you come online'}`,
-        [{
-          text: 'Got it!',
-          onPress: () => {
-            console.log('[CustomerScreen] User dismissed payment success alert');
-          }
-        }]
-      );
-      console.log('[CustomerScreen] Success alert shown, waiting for user interaction');
-      console.log('[CustomerScreen] ========== createPayment COMPLETED SUCCESSFULLY ==========');
     } catch (err) {
-      console.error('[CustomerScreen] ========== createPayment FAILED ==========');
-      console.error('[CustomerScreen] Error:', err);
+      console.error('[CustomerScreen] ❌ Offline payment failed:', err);
+      setPaymentStage('error');
+      setPaymentMessage('Payment failed');
 
-      // Clear animation on error
-      setPaymentStage(null);
-      setPaymentMessage('');
+      // Close BLE connection modal if still open
+      setBleConnectionModal({ visible: false, status: 'searching' });
 
-      // Error already includes rollback information from BundleTransactionManager
       throw err;
+    } finally {
+      // Clear animation
+      setTimeout(() => {
+        setPaymentStage(null);
+        setPaymentMessage('');
+      }, 3000);
     }
   };
 
@@ -1032,79 +828,6 @@ export function CustomerScreen() {
     );
   };
 
-  const settleAll = async () => {
-    if (pendingBundles.length === 0) {
-      Alert.alert('No Bundles', 'No pending payments to settle.');
-      return;
-    }
-
-    if (!isOnline) {
-      Alert.alert('Offline', 'Cannot settle payments while offline. Please connect to internet.');
-      return;
-    }
-
-    const signer = await wallet.getSigner('Settle offline payments');
-    if (!signer) {
-      Alert.alert('Error', 'Wallet not loaded');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Initialize client
-      settlementService.initializeClient(signer);
-
-      const results = await settlementService.settleAllPending(signer);
-
-      // Update transaction states for successful settlements
-      await Promise.all(
-        results.success.map(async result => {
-          try {
-            await bundleTransactionManager.updateBundleState(result.bundleId, BundleState.SETTLED);
-            await bundleTransactionManager.deleteBundle(result.bundleId);
-          } catch (err) {
-            if (__DEV__) {
-              console.warn(`Failed to update transaction state for ${result.bundleId}:`, err);
-            }
-          }
-        })
-      );
-
-      // Update transaction states for failed settlements
-      await Promise.all(
-        results.failed.map(async bundleId => {
-          try {
-            await bundleTransactionManager.updateBundleState(bundleId, BundleState.FAILED, {
-              error: 'Settlement failed',
-            });
-          } catch (err) {
-            if (__DEV__) {
-              console.warn(`Failed to update transaction state for ${bundleId}:`, err);
-            }
-          }
-        })
-      );
-
-      // Update UI
-      const remaining = await bundleStorage.loadBundles();
-      setPendingBundles(normalizeBundles(remaining));
-
-      Alert.alert(
-        'Settlement Complete',
-        `Success: ${results.success.length}\nFailed: ${results.failed.length}\n\n${
-          results.success.length > 0
-            ? 'Bundles:\n' + results.success.map(s => s.bundleId.slice(0, 16) + '...').join('\n')
-            : ''
-        }`,
-        [{ text: 'OK', onPress: loadData }]
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      Alert.alert('Settlement Error', message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const createEscrow = async () => {
     console.log('[CustomerScreen] ========== createEscrow CALLED ==========');
@@ -1148,7 +871,7 @@ export function CustomerScreen() {
 
       // Initialize BeamProgramClient with real signer
       const { BeamProgramClient } = require('../solana/BeamProgram');
-      const beamClient = new BeamProgramClient(Config.solana.rpcUrl[0], signer);
+      const beamClient = new BeamProgramClient(Config.solana.rpcUrl, signer);
 
       console.log('[CustomerScreen] Initializing escrow account...');
       const txSignature = await beamClient.initializeEscrow(amountInSmallestUnit);
@@ -1266,7 +989,7 @@ export function CustomerScreen() {
       >
         <Section
           title="Quick actions"
-          description="Share bundles over QR, mesh, or BLE when traditional networks fail."
+          description="Scan merchant QR codes to create payments that settle automatically."
         >
           <Card style={styles.actionsCard}>
             <View style={styles.actionsRow}>
@@ -1285,7 +1008,7 @@ export function CustomerScreen() {
               />
             </View>
             <Small style={styles.helperText}>
-              Tip: Merchants can broadcast payment requests via QR or mesh witnesses.
+              Payments work offline and settle automatically when online.
             </Small>
           </Card>
         </Section>
@@ -1302,10 +1025,17 @@ export function CustomerScreen() {
         {/* Security & Network Status */}
         <SecurityStatusCard />
         <MeshNetworkStatus />
+        {settlementStatus ? (
+          <Section title="Status" description="Real-time payment processing updates">
+            <Card variant="highlight" style={styles.statusCard}>
+              <Body style={styles.statusText}>{settlementStatus}</Body>
+            </Card>
+          </Section>
+        ) : null}
 
         <Section
-          title="Offline bundles"
-          description={isOnline ? "Payments auto-settle when online. No manual action required." : "Payments stored locally. Will auto-settle when you come online."}
+          title="Payment bundles"
+          description={isOnline ? 'Payments auto-settle on Solana when online. No manual action required.' : 'Payments stored locally. Will auto-settle when you come online.'}
         >
           <Card style={styles.metricsCard}>
             <View style={styles.metricsRow}>
@@ -1331,10 +1061,8 @@ export function CustomerScreen() {
 
             <Small style={styles.helperText}>
               {isOnline
-                ? 'Online: bundles will push to Solana automatically.'
-                : meshDiag.started
-                  ? 'Bluetooth mesh active. Keep both devices nearby and payments will sync automatically.'
-                  : 'Waiting for Bluetooth handshake. Enable Bluetooth and keep devices close to sync payments.'}
+                ? 'Online: payments will settle on Solana automatically.'
+                : 'Offline: payments stored locally, will settle when online.'}
             </Small>
 
             {pendingBundles.length > 0 ? (
@@ -1360,8 +1088,8 @@ export function CustomerScreen() {
               </View>
             ) : (
               <View style={styles.emptyState}>
-                <HeadingM>No pending bundles</HeadingM>
-                <Body style={styles.helperText}>Create a payment and it will appear here until settled on-chain.</Body>
+                <HeadingM>No pending payments</HeadingM>
+                <Body style={styles.helperText}>Create a payment and it will appear here until settled on Solana.</Body>
               </View>
             )}
           </Card>
@@ -1394,6 +1122,7 @@ export function CustomerScreen() {
             </Card>
           </Section>
         ) : null}
+
 
         <Section
           title="Resilience diagnostics"
@@ -1430,57 +1159,27 @@ export function CustomerScreen() {
         </Section>
       </Screen>
 
-      {loading ? (
-        <View style={styles.loadingOverlay}>
-          <Card variant="glass" padding="lg" style={styles.loadingCard}>
-            <ActivityIndicator size="large" color={palette.accentBlue} />
-            <Body style={styles.loadingBody}>Authorizing Solana transactions…</Body>
-          </Card>
-        </View>
-      ) : null}
+      {
+        loading ? (
+          <View style={styles.loadingOverlay} >
+            <Card variant="glass" padding="lg" style={styles.loadingCard}>
+              <ActivityIndicator size="large" color={palette.accentBlue} />
+              <Body style={styles.loadingBody}>Authorizing Solana transactions…</Body>
+            </Card>
+          </View>
+        ) : null
+      }
 
       <Modal visible={showScanner} animationType="slide" presentationStyle="fullScreen">
         <QRScanner onScan={handleQRScan} onClose={() => setShowScanner(false)} />
       </Modal>
 
-      <Modal
-        visible={shareModalVisible && Boolean(sharePayload)}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShareModalVisible(false)}
-      >
-        <View style={styles.shareOverlay}>
-          <Card variant="glass" style={styles.shareCard}>
-            <HeadingM style={styles.shareTitle}>Share payment bundle</HeadingM>
-            {shareQRImageBase64 ? (
-              <View style={styles.shareQrWrapper}>
-                <Image
-                  source={{ uri: `data:image/png;base64,${shareQRImageBase64}` }}
-                  style={{ width: 400, height: 400 }}
-                  resizeMode="contain"
-                />
-              </View>
-            ) : null}
-            {shareMetadata ? (
-              <Body style={styles.shareDetails}>
-                {`Amount: $${(shareMetadata.amount / 1_000_000).toFixed(2)} USDC\nMerchant: ${shareMetadata.merchant.slice(0, 8)}…${shareMetadata.merchant.slice(-4)}`}
-              </Body>
-            ) : null}
-            <Body style={styles.shareHint}>
-              Ask the merchant to scan this code to capture your signed bundle while offline.
-            </Body>
-            <Button label="Close" variant="secondary" onPress={() => setShareModalVisible(false)} />
-          </Card>
-        </View>
-      </Modal>
-
-      
 
       {/* Payment confirmation sheet */}
       <PaymentSheet
         visible={paySheetVisible}
         title="Confirm Payment"
-        subtitle={pendingPayInfo ? `Merchant ${pendingPayInfo.merchant.slice(0,8)}…${pendingPayInfo.merchant.slice(-6)}` : undefined}
+        subtitle={pendingPayInfo ? `Merchant ${pendingPayInfo.merchant.slice(0, 8)}…${pendingPayInfo.merchant.slice(-6)}` : undefined}
         amountLabel={`$${paymentAmount.toFixed(2)} USDC`}
         onCancel={() => setPaySheetVisible(false)}
         onConfirm={() => payConfirmRef.current && payConfirmRef.current()}
@@ -1489,15 +1188,42 @@ export function CustomerScreen() {
         footnote={bleDirect.getDiagnostics().started ? 'Bluetooth: On — will deliver automatically' : 'Bluetooth: Off — use Show QR if needed'}
       />
 
-     <Modal
+      {/* NEW: BLE Connection Modal */}
+      <BLEConnectionModal
+        visible={bleConnectionModal.visible}
+        status={bleConnectionModal.status}
+        peerName={bleConnectionModal.peerName}
+        role="customer"
+        onConfirm={() => setBleConnectionModal({ ...bleConnectionModal, visible: false })}
+        onCancel={() => {
+          setBleConnectionModal({ visible: false, status: 'searching' });
+          setPaySheetVisible(false);
+        }}
+      />
+
+      {/* NEW: Transaction Success Modal */}
+      <TransactionSuccessModal
+        visible={txSuccessModal.visible}
+        type={txSuccessModal.type}
+        role="customer"
+        amount={txSuccessModal.amount}
+        signature={txSuccessModal.signature}
+        bundleId={txSuccessModal.bundleId}
+        onClose={() => {
+          setTxSuccessModal({ ...txSuccessModal, visible: false });
+          loadData(); // Refresh balances after closing
+        }}
+      />
+
+      <Modal
         visible={showEscrowModal}
         transparent
         animationType="slide"
         onRequestClose={() => setShowEscrowModal(false)}
       >
-        <View style={styles.shareOverlay}>
+        <View style={styles.modalOverlay}>
           <Card variant="glass" style={styles.escrowModalCard}>
-            <HeadingM style={styles.shareTitle}>Create Escrow Account</HeadingM>
+            <HeadingM style={styles.modalTitle}>Create Escrow Account</HeadingM>
 
             <Body style={styles.escrowDescription}>
               Initialize your escrow account on Solana to enable offline payments.
@@ -1550,15 +1276,17 @@ export function CustomerScreen() {
         </View>
       </Modal>
 
-      {creatingEscrow && (
-        <View style={styles.loadingOverlay}>
-          <Card variant="glass" padding="lg" style={styles.loadingCard}>
-            <ActivityIndicator size="large" color={palette.accentBlue} />
-            <Body style={styles.loadingBody}>Creating escrow account...</Body>
-            <Small style={styles.helperText}>This may take a few seconds</Small>
-          </Card>
-        </View>
-      )}
+      {
+        creatingEscrow && (
+          <View style={styles.loadingOverlay}>
+            <Card variant="glass" padding="lg" style={styles.loadingCard}>
+              <ActivityIndicator size="large" color={palette.accentBlue} />
+              <Body style={styles.loadingBody}>Creating escrow account...</Body>
+              <Small style={styles.helperText}>This may take a few seconds</Small>
+            </Card>
+          </View>
+        )
+      }
     </>
   );
 }
@@ -1711,36 +1439,15 @@ const styles = StyleSheet.create({
   loadingBody: {
     color: palette.textSecondary,
   },
-  
-  shareOverlay: {
+  modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(2,6,23,0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: spacing.xl,
   },
-  shareCard: {
-    width: '100%',
-    maxWidth: 360,
-    gap: spacing.lg,
-    alignItems: 'center',
-    padding: spacing.xl,
-  },
-  shareQrWrapper: {
-    backgroundColor: '#fff',
-    padding: spacing.lg,
-    borderRadius: radius.lg,
-  },
-  shareTitle: {
+  modalTitle: {
     textAlign: 'center',
-  },
-  shareDetails: {
-    textAlign: 'center',
-    color: 'rgba(148,163,184,0.9)',
-  },
-  shareHint: {
-    textAlign: 'center',
-    color: 'rgba(148,163,184,0.75)',
   },
   escrowModalCard: {
     width: '100%',
@@ -1780,5 +1487,12 @@ const styles = StyleSheet.create({
   modalActions: {
     flexDirection: 'row',
     gap: spacing.md,
+  },
+  statusCard: {
+    gap: spacing.md,
+  },
+  statusText: {
+    color: palette.textPrimary,
+    textAlign: 'center',
   },
 });

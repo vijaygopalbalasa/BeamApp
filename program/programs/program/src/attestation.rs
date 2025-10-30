@@ -3,9 +3,11 @@ use ed25519_dalek::{PublicKey, Signature, Verifier};
 use sha2::{Digest, Sha256};
 
 const ATTESTATION_PREFIX: &[u8] = b"beam.attestation.v1";
-// Test verifier public key - in production, this would be the key of a trusted TEE verifier service
+// Verifier service public key - signs attestation envelopes
+// Generated: 2025-01-27
+// Private key stored in verifier service .env (VERIFIER_SIGNING_KEY)
 const VERIFIER_PUBKEY_BYTES: [u8; 32] = [
-    136, 45, 85, 209, 177, 250, 101, 107, 193, 219, 164, 39, 89, 87, 49, 133, 149, 126, 150, 141, 151, 47, 160, 235, 163, 194, 185, 187, 47, 202, 18, 74
+    87, 206, 238, 248, 74, 20, 230, 164, 179, 203, 197, 110, 238, 157, 193, 117, 227, 137, 50, 120, 126, 101, 72, 203, 104, 54, 224, 253, 192, 80, 235, 17
 ];
 const MAX_ATTESTATION_AGE: i64 = 86_400; // 24 hours
 
