@@ -23,7 +23,6 @@ import { attestationService, type AttestedBundle } from './AttestationService';
 import type { BeamSigner } from '../wallet/WalletManager';
 import { Buffer } from 'buffer';
 import type { NonceRegistryAccount } from '../solana/types';
-import { sha256 } from '@noble/hashes/sha256';
 import { createModuleLogger } from './Logger';
 
 const Logger = createModuleLogger('SettlementService');
@@ -245,6 +244,56 @@ export class SettlementService {
     if (!this.beamClient) return 0;
     const escrow = await this.beamClient.getEscrowAccount(owner);
     return escrow?.escrowBalance || 0;
+  }
+
+  /**
+   * Get USDC balance for a public key
+   * @param pubkey Public key to check balance for
+   * @returns Balance in lamports and decimals
+   */
+  async getUsdcBalance(pubkey: PublicKey): Promise<{ balance: number; decimals: number }> {
+    try {
+      Logger.info('SettlementService', 'Getting USDC balance for:', pubkey.toBase58());
+
+      const usdcMint = new PublicKey(Config.tokens.usdc.mint);
+
+      // Get all token accounts for this owner with USDC mint
+      const tokenAccounts = await this.withTimeout(
+        this.connection.getTokenAccountsByOwner(pubkey, {
+          mint: usdcMint,
+        }),
+        10000 // 10 second timeout
+      );
+
+      if (tokenAccounts.value.length === 0) {
+        Logger.info('SettlementService', 'No USDC token account found');
+        return { balance: 0, decimals: Config.tokens.usdc.decimals };
+      }
+
+      // Get balance of first token account
+      const accountInfo = tokenAccounts.value[0];
+      const balanceInfo = await this.withTimeout(
+        this.connection.getTokenAccountBalance(accountInfo.pubkey),
+        10000 // 10 second timeout
+      );
+
+      const balance = parseFloat(balanceInfo.value.amount) / Math.pow(10, balanceInfo.value.decimals);
+
+      Logger.info('SettlementService', 'USDC balance:', {
+        amount: balanceInfo.value.amount,
+        uiAmount: balanceInfo.value.uiAmount,
+        decimals: balanceInfo.value.decimals,
+        balance,
+      });
+
+      return {
+        balance,
+        decimals: balanceInfo.value.decimals,
+      };
+    } catch (error) {
+      Logger.error('SettlementService', 'Failed to get USDC balance:', error);
+      return { balance: 0, decimals: Config.tokens.usdc.decimals };
+    }
   }
 
   async getNonceRegistrySnapshot(owner: PublicKey, signer: BeamSigner): Promise<NonceRegistryAccount | null> {

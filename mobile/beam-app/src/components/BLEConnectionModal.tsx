@@ -10,7 +10,7 @@ import { Modal, View, StyleSheet, ActivityIndicator } from 'react-native';
 import { HeadingM, Body, Small } from './ui/Typography';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
-import { palette, spacing, radius } from '../design/tokens';
+import { palette, spacing } from '../design/tokens';
 
 export interface BLEConnectionModalProps {
   visible: boolean;

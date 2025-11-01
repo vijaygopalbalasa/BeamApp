@@ -42,14 +42,31 @@ class AttestationService {
       skipAttestationFetch?: boolean;
     } = {}
   ): Promise<AttestationEnvelope | undefined> {
+    if (__DEV__) {
+      console.log(`[AttestationService] storeBundle called for ${bundle.tx_id}`);
+      console.log(`[AttestationService] skipAttestationFetch: ${options.skipAttestationFetch}`);
+    }
+
     const payloadJson = JSON.stringify(encodeOfflineBundle(bundle));
     const encodedPayload = toBase64(new TextEncoder().encode(payloadJson));
 
     const initialMetadata = this.attachAttestations(metadata, options);
+
+    if (__DEV__) {
+      console.log(`[AttestationService] Storing transaction in SecureStorage for ${bundle.tx_id}`);
+    }
+
     await SecureStorage.storeTransaction(bundle.tx_id, encodedPayload, initialMetadata);
+
+    if (__DEV__) {
+      console.log(`[AttestationService] SecureStorage.storeTransaction completed for ${bundle.tx_id}`);
+    }
 
     // If skipAttestationFetch is true, don't fetch new attestation
     if (options.skipAttestationFetch) {
+      if (__DEV__) {
+        console.log(`[AttestationService] skipAttestationFetch=true, returning undefined for ${bundle.tx_id}`);
+      }
       return undefined;
     }
 

@@ -70,8 +70,8 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
         throw new Error('Failed to generate backup: empty backup data');
       }
 
-      // Convert JSON to Base64 for user-friendly display
-      const base64Backup = Buffer.from(blob, 'utf8').toString('base64');
+      // Convert JSON to Base64 for user-friendly display (using btoa for React Native compatibility)
+      const base64Backup = btoa(unescape(encodeURIComponent(blob)));
       setBackup(base64Backup);
       console.log('[WalletBackup] Backup set successfully');
       Alert.alert('Backup Created Successfully', 'Your wallet has been encrypted and backed up.\n\nPlease copy the backup text below and store it in a safe place (like a password manager or encrypted file).\n\nYou will need both this backup AND your passphrase to restore your wallet.');

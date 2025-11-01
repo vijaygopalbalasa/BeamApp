@@ -77,7 +77,7 @@ export function Button({
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <>
-              {icon}
+              {icon && (typeof icon === 'string' ? <Text>{icon}</Text> : icon)}
               <Text style={[styles.label, styles[`label_${variant}`], labelStyle]}>
                 {label}
               </Text>

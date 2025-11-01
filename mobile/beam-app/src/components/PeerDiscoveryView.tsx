@@ -1,10 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, StyleSheet, FlatList, Animated, Easing } from 'react-native';
 import { Card } from './ui/Card';
 import { Section } from './ui/Section';
 import { HeadingM, Body, Small } from './ui/Typography';
 import { palette, spacing, radius } from '../design/tokens';
-import { bleDirect } from '../services/BLEDirectService';
 
 interface Peer {
   address: string;
@@ -20,37 +19,14 @@ interface PeerDiscoveryViewProps {
 }
 
 export const PeerDiscoveryView: React.FC<PeerDiscoveryViewProps> = ({ peers: externalPeers }) => {
-  const [internalPeers, setInternalPeers] = useState<Peer[]>([]);
-  const [loading, setLoading] = useState(false);
+  const peers = useMemo(() => externalPeers ?? [], [externalPeers]);
 
-  const peers = externalPeers || internalPeers;
-
-  const loadPeers = useCallback(async () => {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const discoveredPeers = await bleDirect.requestPeers();
-      setInternalPeers(discoveredPeers.map(p => ({ ...p, lastSeen: Date.now() })));
-    } catch (error) {
-      console.error('[PeerDiscoveryView] Failed to load peers:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [loading]);
-
-  useEffect(() => {
-    if (!externalPeers) {
-      loadPeers();
-      const interval = setInterval(loadPeers, 5000); // Refresh every 5 seconds
-      return () => clearInterval(interval);
-    }
-  }, [externalPeers, loadPeers]);
-  const [pulseAnims] = useState(() =>
-    peers.reduce((acc, peer) => {
+  const pulseAnims = useMemo(() => {
+    return peers.reduce((acc, peer) => {
       acc[peer.address] = new Animated.Value(0);
       return acc;
-    }, {} as Record<string, Animated.Value>)
-  );
+    }, {} as Record<string, Animated.Value>);
+  }, [peers]);
 
   useEffect(() => {
     // Animate each connected peer

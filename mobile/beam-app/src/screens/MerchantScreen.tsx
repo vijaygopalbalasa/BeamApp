@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Alert, ActivityIndicator, RefreshControl, TextInput, Switch, View, StyleSheet, Modal, PermissionsAndroid, Platform, Image } from 'react-native';
+import { Alert, ActivityIndicator, TextInput, View, StyleSheet, Modal, Image, Platform } from 'react-native';
 import type { BeamQRPaymentRequest, OfflineBundle, AttestationEnvelope } from '@beam/shared';
 import EncryptedStorage from 'react-native-encrypted-storage';
 import QRCodeGenerator from '../native/QRCodeGenerator';
@@ -7,11 +7,12 @@ import bs58 from 'bs58';
 import { wallet } from '../wallet/WalletManager';
 import { serializeBundle, verifyCompletedBundle } from '@beam/shared';
 import { SettlementService } from '../services/SettlementService';
-import { bleDirect, type BLEBundleMessage, type BLEDiagnostics } from '../services/BLEDirectService';
-import { bleConnectionManager } from '../services/BLEConnectionManager';
 import { Config } from '../config';
 import { attestationService } from '../services/AttestationService';
+import { meshNetworkService } from '../services/MeshNetworkService';
+import type { BLEBundleReceivedEvent, BLEErrorEvent } from '../services/MeshNetworkService';
 import { bundleTransactionManager, BundleState } from '../storage/BundleTransactionManager';
+import { meshDiagnosticsStore } from '../services/MeshDiagnosticsStore';
 import { autoSettlementService } from '../services/AutoSettlementService';
 import { networkService } from '../services/NetworkService';
 import { BeamProgramClient } from '../solana/BeamProgram';
@@ -25,14 +26,150 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import { Metric } from '../components/ui/Metric';
 import { HeadingL, HeadingM, Body, Small } from '../components/ui/Typography';
 import { PaymentSheet } from '../components/features/PaymentSheet';
-import { PeerDiscoveryView } from '../components/PeerDiscoveryView';
+import { ReceivedBundleList } from '../components/features/ReceivedBundleList';
+
 import { MeshNetworkStatus } from '../components/MeshNetworkStatus';
-import { BLEConnectionModal } from '../components/BLEConnectionModal';
 import { TransactionSuccessModal } from '../components/TransactionSuccessModal';
+import { MeshDiagnosticsModal } from '../components/MeshDiagnosticsModal';
+import { BLEConnectionModal } from '../components/BLEConnectionModal';
+import type { ReceivedBundleListItem } from '../components/features/ReceivedBundleList';
 import { palette, radius, spacing } from '../design/tokens';
 import { QRScanner } from '../components/QRScanner';
-import { decodeOfflineBundle } from '../storage/BundleStorage';
+import { decodeOfflineBundle, encodeOfflineBundle } from '../storage/BundleStorage';
 import { Buffer } from 'buffer';
+
+function normalizeSignatureField(value: unknown, depth: number = 0): Uint8Array | undefined {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (depth > 5) {
+    console.warn('[MerchantScreen] Signature normalization exceeded max depth');
+    return undefined;
+  }
+
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    const view = value as ArrayBufferView;
+    return new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (value.every(entry => typeof entry === 'number')) {
+      return Uint8Array.from(value as number[]);
+    }
+
+    const flattened: number[] = [];
+    for (const entry of value) {
+      if (typeof entry === 'number') {
+        flattened.push(entry);
+        continue;
+      }
+      if (Array.isArray(entry) && entry.every(item => typeof item === 'number')) {
+        flattened.push(...(entry as number[]));
+        continue;
+      }
+
+      const nested = normalizeSignatureField(entry, depth + 1);
+      if (nested) {
+        flattened.push(...Array.from(nested));
+      }
+    }
+
+    if (flattened.length > 0) {
+      return Uint8Array.from(flattened);
+    }
+  }
+
+  if (typeof value === 'string') {
+    try {
+      return Uint8Array.from(Buffer.from(value, 'base64'));
+    } catch {
+      // Not base64
+    }
+
+    try {
+      return bs58.decode(value);
+    } catch {
+      // Not base58
+    }
+
+    if (/^[0-9a-fA-F]+$/.test(value) && value.length % 2 === 0) {
+      try {
+        return Uint8Array.from(Buffer.from(value, 'hex'));
+      } catch {
+        // Ignore
+      }
+    }
+
+    console.warn('[MerchantScreen] Unsupported signature string format');
+    return undefined;
+  }
+
+  if (typeof value === 'object') {
+    const maybe = value as Record<string, unknown>;
+
+    if (maybe.type === 'Buffer' && 'data' in maybe) {
+      const coerced = normalizeSignatureField(maybe.data, depth + 1);
+      if (coerced) {
+        return coerced;
+      }
+    }
+
+    if ('data' in maybe) {
+      const coerced = normalizeSignatureField(maybe.data, depth + 1);
+      if (coerced) {
+        return coerced;
+      }
+    }
+
+    if ('bytes' in maybe) {
+      const coerced = normalizeSignatureField(maybe.bytes, depth + 1);
+      if (coerced) {
+        return coerced;
+      }
+    }
+
+    if ('value' in maybe) {
+      const coerced = normalizeSignatureField(maybe.value, depth + 1);
+      if (coerced) {
+        return coerced;
+      }
+    }
+
+    const numericEntries = Object.entries(maybe).filter(([key, val]) => {
+      return !Number.isNaN(Number(key)) && typeof val === 'number';
+    });
+
+    if (numericEntries.length > 0) {
+      const sorted = numericEntries.sort(
+        ([a], [b]) => Number(a) - Number(b),
+      );
+      return Uint8Array.from(sorted.map(([, val]) => val as number));
+    }
+
+    console.warn('[MerchantScreen] Unsupported signature object:', JSON.stringify(maybe).slice(0, 200));
+    return undefined;
+  }
+
+  console.warn('[MerchantScreen] Unsupported signature value type', typeof value);
+  return undefined;
+}
+
+function coerceNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 const MERCHANT_RECEIVED_KEY = '@beam:merchant_received';
 const settlementService = new SettlementService();
@@ -49,21 +186,20 @@ export function MerchantScreen() {
   const confirmRef = useRef<null | (() => Promise<void>)>(null);
   const [, setQRData] = useState<string | null>(null);
   const [qrImageBase64, setQRImageBase64] = useState<string | null>(null);
-  const [meshEnabled, setMeshEnabled] = useState(false);
-  const [receivedPayments, setReceivedPayments] = useState<OfflineBundle[]>([]);
+  const [isAdvertising, setIsAdvertising] = useState(false);
+  const [receivedPayments, setReceivedPayments] = useState<ReceivedBundleListItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [merchantAddress, setMerchantAddress] = useState<string | null>(null);
-  const [meshDiag, setMeshDiag] = useState<BLEDiagnostics>(bleDirect.getDiagnostics());
-  const [disputingId, setDisputingId] = useState<string | null>(null);
+  const [_bleStatus, setBleStatus] = useState<string>('Idle');
+  const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [showBundleScanner, setShowBundleScanner] = useState(false);
   const [isOnline, setIsOnline] = useState(networkService.getIsOnline());
   const [settlementStatus, setSettlementStatus] = useState<string>('');
   const [merchantEscrowBalance, setMerchantEscrowBalance] = useState(0);
-  const [lastKnownBalance, setLastKnownBalance] = useState(0);
-  const [merchantUsdcBalance, setMerchantUsdcBalance] = useState(0);
+  const [_lastKnownBalance, setLastKnownBalance] = useState(0);
+  const [_merchantUsdcBalance, setMerchantUsdcBalance] = useState(0);
   const [lastKnownUsdcBalance, setLastKnownUsdcBalance] = useState(0);
-  const meshUnsubscribe = useRef<(() => void) | null>(null);
+  const bleUnsubscribe = useRef<(() => void) | null>(null);
 
   // NEW: BLE Connection Modal State
   const [bleConnectionModal, setBleConnectionModal] = useState<{
@@ -80,6 +216,11 @@ export function MerchantScreen() {
     signature?: string;
     bundleId?: string;
   }>({ visible: false, type: 'offline', amount: 0 });
+  const [fallbackModal, setFallbackModal] = useState<{
+    visible: boolean;
+    imageBase64?: string;
+    bundleId?: string;
+  }>({ visible: false });
 
   const decodeAttestationFromPayload = useCallback((raw: any): AttestationEnvelope | undefined => {
     if (!raw) {
@@ -108,17 +249,58 @@ export function MerchantScreen() {
 
   const loadReceivedPayments = useCallback(async () => {
     try {
-      const json = await EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY);
-      if (json) {
-        const payments: OfflineBundle[] = JSON.parse(json);
-        setReceivedPayments(payments);
+      const [transactions, legacyJson] = await Promise.all([
+        bundleTransactionManager.getAllTransactions(),
+        EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY),
+      ]);
+
+      const items = new Map<string, ReceivedBundleListItem>();
+
+      transactions.forEach(tx => {
+        if (!tx || !tx.bundle) {
+          return;
+        }
+        items.set(tx.bundle.tx_id, {
+          bundle: tx.bundle,
+          state: tx.state,
+          updatedAt: tx.timestamp,
+          error: tx.error,
+        });
+      });
+
+      if (legacyJson) {
+        try {
+          const legacyBundles: OfflineBundle[] = JSON.parse(legacyJson);
+          legacyBundles.forEach(bundle => {
+            if (!items.has(bundle.tx_id)) {
+              items.set(bundle.tx_id, {
+                bundle,
+                state: BundleState.PENDING,
+                updatedAt: bundle.timestamp,
+              });
+            }
+          });
+        } catch (parseErr) {
+          console.error('[MerchantScreen] Failed to parse legacy merchant receipts:', parseErr);
+        }
       }
+
+      const filtered = Array.from(items.values())
+        .filter(item =>
+          (!merchantAddress || item.bundle.merchant_pubkey === merchantAddress) &&
+          item.state !== BundleState.SETTLED &&
+          item.state !== BundleState.ROLLBACK
+        )
+        .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+      setReceivedPayments(filtered);
+      meshDiagnosticsStore.writeQueueSnapshot('merchant', filtered);
+      return filtered;
     } catch (err) {
-      if (__DEV__) {
-        console.error('Failed to load received payments:', err);
-      }
+      console.error('Failed to load received payments:', err);
+      return [];
     }
-  }, []);
+  }, [merchantAddress]);
 
   useEffect(() => {
     void (async () => {
@@ -129,6 +311,40 @@ export function MerchantScreen() {
     })();
     void loadReceivedPayments();
   }, [loadReceivedPayments]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return () => {};
+    }
+
+    const unsubscribe = meshNetworkService.onAdvertisingStateChange(event => {
+      switch (event.status) {
+        case 'started':
+          setIsAdvertising(true);
+          setBleStatus('Advertising');
+          break;
+        case 'stopped':
+          setIsAdvertising(false);
+          setBleStatus('Idle');
+          break;
+        case 'error':
+          setIsAdvertising(false);
+          setBleStatus('Error');
+          Alert.alert('Bluetooth Error', event.errorMessage ?? 'Advertising failed. Check Bluetooth settings.', [{ text: 'OK' }]);
+          break;
+      }
+    });
+
+    bleUnsubscribe.current?.();
+    bleUnsubscribe.current = unsubscribe;
+
+    return () => {
+      unsubscribe();
+      if (bleUnsubscribe.current === unsubscribe) {
+        bleUnsubscribe.current = null;
+      }
+    };
+  }, []);
 
   // Initialize merchant escrow balance from blockchain
   useEffect(() => {
@@ -141,7 +357,6 @@ export function MerchantScreen() {
         console.log('[MerchantScreen] Fetching merchant escrow balance...');
         const readOnlyClient = new BeamProgramClient(
           Config.solana.rpcUrl,
-          null,
         );
         const merchantPubkey = new PublicKey(merchantAddress);
         const escrowAccount = await readOnlyClient.getEscrowAccount(merchantPubkey);
@@ -163,11 +378,7 @@ export function MerchantScreen() {
   }, [merchantAddress, isOnline]);
 
   useEffect(() => {
-    const unsubscribe = bleDirect.addDiagnosticsListener(diag => {
-      setMeshDiag(diag);
-      setMeshEnabled(diag.started);
-    });
-    return unsubscribe;
+    // Reserved for future diagnostics hooks
   }, []);
 
   // Setup network status listener
@@ -177,12 +388,13 @@ export function MerchantScreen() {
       setIsOnline(online);
       if (online) {
         setSettlementStatus('🌐 Online - Auto-settling...');
+        void loadReceivedPayments();
       } else {
         setSettlementStatus('📡 Offline - Payments stored locally');
       }
     });
     return unsubscribe;
-  }, []);
+  }, [loadReceivedPayments]);
 
   // Setup auto-settlement listener
   useEffect(() => {
@@ -203,7 +415,7 @@ export function MerchantScreen() {
           console.log('[MerchantScreen] Settlement confirmed, balance synced to blockchain');
 
           // NEW: Show settled transaction modal with signature
-          const signature = event.message.match(/Transaction: (\w+)/)?.[1];
+          const signature = event.message?.match(/Transaction: (\w+)/)?.[1];
           setTxSuccessModal({
             visible: true,
             type: 'settled',
@@ -213,7 +425,7 @@ export function MerchantScreen() {
           });
 
           // Reload payments
-          loadReceivedPayments();
+          void loadReceivedPayments();
           break;
         case 'settlement_error':
           setSettlementStatus(`❌ Settlement failed: ${event.error}`);
@@ -233,11 +445,10 @@ export function MerchantScreen() {
 
     const pollInterval = setInterval(async () => {
       try {
-        const { connectionService } = await import('../services/ConnectionService');
         const merchantPubkey = new PublicKey(merchantAddress);
 
         // Get merchant's USDC wallet balance
-        const usdcBalanceInfo = await connectionService.getUsdcBalance(merchantPubkey);
+        const usdcBalanceInfo = await settlementService.getUsdcBalance(merchantPubkey);
         const newUsdcBalance = usdcBalanceInfo.balance;
 
         // Check if USDC balance increased (payment received)
@@ -281,18 +492,219 @@ export function MerchantScreen() {
 
   useEffect(() => {
     return () => {
-      meshUnsubscribe.current?.();
-      meshUnsubscribe.current = null;
-      if (meshEnabled) {
-        bleDirect.stopBLENode().catch(err => {
-          if (__DEV__) {
-            console.warn('Failed to stop mesh network on unmount', err);
-          }
-        });
-      }
-    };
-  }, [meshEnabled]);
+      console.log('[MerchantScreen] Component unmounting - cleaning up BLE');
 
+      bleUnsubscribe.current?.();
+      bleUnsubscribe.current = null;
+
+      // Stop BLE node
+      meshNetworkService.stopBLENode()
+        .catch((error) => {
+          console.error('[MerchantScreen] Error stopping BLE node:', error);
+        })
+        .finally(() => {
+          setIsAdvertising(false);
+          setBleStatus('Idle');
+        });
+
+      // Cleanup all listeners
+      meshNetworkService.cleanup();
+    };
+  }, []); // Only cleanup on actual component unmount, not on state changes
+
+  // Listen for incoming payment bundles via BLE
+  useEffect(() => {
+    console.log('[MerchantScreen] Setting up BLE bundle listener');
+
+    const unsubscribeBundles = meshNetworkService.onBundleReceived(async (event: BLEBundleReceivedEvent) => {
+      console.log('[MerchantScreen] 📡 BLE Bundle received:', {
+        bundleId: event.bundleId,
+        bundleSize: event.bundleSize,
+        deviceAddress: event.deviceAddress,
+        deviceName: event.deviceName,
+        timestamp: new Date(event.timestamp).toISOString(),
+      });
+
+      if (!merchantAddress) {
+        console.warn('[MerchantScreen] Merchant address unavailable; ignoring bundle');
+        return;
+      }
+
+      try {
+        // Parse bundle JSON
+        const rawBundle = JSON.parse(event.bundleData) as OfflineBundle & {
+          payer_signature?: unknown;
+          merchant_signature?: unknown;
+        };
+
+        console.log('[MerchantScreen] Raw bundle signature payloads:', {
+          payerType: typeof rawBundle.payer_signature,
+          merchantType: typeof rawBundle.merchant_signature,
+        });
+
+        if (__DEV__) {
+          console.log('[MerchantScreen] Raw payer signature sample:',
+            JSON.stringify(rawBundle.payer_signature)?.slice(0, 160));
+          console.log('[MerchantScreen] Raw merchant signature sample:',
+            JSON.stringify(rawBundle.merchant_signature)?.slice(0, 160));
+        }
+
+        const bundle: OfflineBundle = {
+          tx_id: typeof rawBundle.tx_id === 'string' ? rawBundle.tx_id : String(rawBundle.tx_id ?? ''),
+          escrow_pda: typeof rawBundle.escrow_pda === 'string' ? rawBundle.escrow_pda : String(rawBundle.escrow_pda ?? ''),
+          token: {
+            symbol: typeof rawBundle.token?.symbol === 'string' ? rawBundle.token.symbol : String(rawBundle.token?.symbol ?? 'USDC'),
+            mint: typeof rawBundle.token?.mint === 'string' ? rawBundle.token.mint : String(rawBundle.token?.mint ?? ''),
+            decimals: coerceNumber(rawBundle.token?.decimals, 0),
+            amount: coerceNumber(rawBundle.token?.amount, 0),
+          },
+          payer_pubkey: typeof rawBundle.payer_pubkey === 'string' ? rawBundle.payer_pubkey : String(rawBundle.payer_pubkey ?? ''),
+          merchant_pubkey: typeof rawBundle.merchant_pubkey === 'string' ? rawBundle.merchant_pubkey : String(rawBundle.merchant_pubkey ?? ''),
+          nonce: coerceNumber(rawBundle.nonce, 0),
+          timestamp: coerceNumber(rawBundle.timestamp, Date.now()),
+          version: coerceNumber(rawBundle.version, 1),
+          payer_signature: normalizeSignatureField(rawBundle.payer_signature),
+          merchant_signature: normalizeSignatureField(rawBundle.merchant_signature),
+        };
+
+        if (!bundle.tx_id || !bundle.payer_pubkey || !bundle.merchant_pubkey) {
+          throw new Error('Received bundle missing mandatory identifiers');
+        }
+
+        if (!bundle.payer_signature || bundle.payer_signature.length !== 64) {
+          throw new Error('Invalid payer signature payload received over Bluetooth');
+        }
+
+        if (bundle.merchant_signature && bundle.merchant_signature.length !== 64) {
+          console.warn('[MerchantScreen] Ignoring merchant signature with unexpected length', bundle.merchant_signature.length);
+          bundle.merchant_signature = undefined;
+        }
+
+        if (!Number.isFinite(bundle.token.amount) || bundle.token.amount <= 0) {
+          throw new Error('Invalid payment amount in bundle payload');
+        }
+
+        console.log('[MerchantScreen] Normalized signature lengths:', {
+          payerLength: bundle.payer_signature?.length,
+          merchantLength: bundle.merchant_signature?.length,
+        });
+
+        console.log('[MerchantScreen] Received bundle token field:', JSON.stringify(bundle.token, null, 2));
+        console.log('[MerchantScreen] Received bundle full structure:', {
+          tx_id: bundle.tx_id,
+          token: bundle.token,
+          payer_pubkey: bundle.payer_pubkey,
+          merchant_pubkey: bundle.merchant_pubkey,
+          nonce: bundle.nonce,
+          has_payer_sig: !!bundle.payer_signature,
+          has_merchant_sig: !!bundle.merchant_signature,
+        });
+
+        // Explicitly normalize token object to ensure all properties are enumerable
+        // BLE transmission can create objects with non-enumerable properties
+        const normalizedToken = bundle.token ? {
+          symbol: bundle.token.symbol,
+          mint: bundle.token.mint,
+          decimals: bundle.token.decimals,
+          amount: bundle.token.amount,
+        } : null;
+
+        console.log('[MerchantScreen] Normalized token before unsigned:', JSON.stringify(normalizedToken, null, 2));
+
+        const unsigned = {
+          tx_id: bundle.tx_id,
+          escrow_pda: bundle.escrow_pda,
+          token: normalizedToken,
+          payer_pubkey: bundle.payer_pubkey,
+          merchant_pubkey: bundle.merchant_pubkey,
+          nonce: bundle.nonce,
+          timestamp: bundle.timestamp,
+          version: bundle.version,
+        };
+
+        console.log('[MerchantScreen] Unsigned object before serialize:', JSON.stringify(unsigned, null, 2));
+        const canonicalBytes = serializeBundle(unsigned);
+        console.log('[MerchantScreen] Canonical bundle JSON:', Buffer.from(canonicalBytes).toString('utf8'));
+        console.log(
+          '[MerchantScreen] Incoming payer signature (hex):',
+          bundle.payer_signature ? Buffer.from(bundle.payer_signature).toString('hex') : 'missing'
+        );
+
+        // Verify bundle signature
+        const payerPubkey = bs58.decode(bundle.payer_pubkey);
+        const merchantPubkeyBytes = bs58.decode(merchantAddress);
+        const verification = verifyCompletedBundle(bundle, payerPubkey, merchantPubkeyBytes);
+
+        if (!verification.payerValid) {
+          console.error('[MerchantScreen] ❌ Invalid bundle signature');
+          Alert.alert(
+            'Invalid Payment',
+            'Received payment bundle has invalid signature',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
+        console.log('[MerchantScreen] ✅ Bundle signature verified');
+
+        // Extract payment info
+        const amountUSDC = bundle.token?.amount ? bundle.token.amount / 1_000_000 : 0;
+
+        const metadata = {
+          amount: bundle.token.amount,
+          currency: bundle.token.symbol ?? 'USDC',
+          merchantPubkey: bundle.merchant_pubkey,
+          payerPubkey: bundle.payer_pubkey,
+          nonce: bundle.nonce,
+          createdAt: bundle.timestamp,
+        };
+
+        console.log('[MerchantScreen] 📝 About to call storeReceivedBundle...');
+        console.log('[MerchantScreen] Bundle ID:', bundle.tx_id);
+        console.log('[MerchantScreen] Metadata:', metadata);
+
+        await bundleTransactionManager.storeReceivedBundle({
+          bundle,
+          metadata,
+        });
+
+        console.log('[MerchantScreen] ✅ storeReceivedBundle completed successfully');
+
+        await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.QUEUED);
+        await loadReceivedPayments();
+
+        Alert.alert(
+          '💰 Payment Received!',
+          `Received ${amountUSDC.toFixed(2)} USDC from customer via Bluetooth.\n\nDevice: ${event.deviceName}\nYou can settle this payment when back online.`,
+          [{ text: 'OK' }]
+        );
+      } catch (error) {
+        console.error('[MerchantScreen] ❌ Failed to process bundle:', error);
+        Alert.alert(
+          'Error',
+          'Failed to process received payment bundle',
+          [{ text: 'OK' }]
+        );
+      }
+    });
+
+    // Listen for BLE errors
+    const unsubscribeErrors = meshNetworkService.onError((event: BLEErrorEvent) => {
+      console.error('[MerchantScreen] 🚨 BLE Error:', event);
+      Alert.alert(
+        'Bluetooth Error',
+        event.errorMessage,
+        [{ text: 'OK' }]
+      );
+    });
+
+    // Cleanup on unmount
+    return () => {
+      console.log('[MerchantScreen] Cleaning up BLE bundle listener');
+      unsubscribeBundles();
+      unsubscribeErrors();
+    };
+  }, [merchantAddress, loadReceivedPayments]);
 
   const handleCustomerBundleScan = useCallback(
     async (scannedValue: string) => {
@@ -334,10 +746,19 @@ export function MerchantScreen() {
           throw new Error('Invalid payer signature on bundle.');
         }
 
+        // Explicitly normalize token object to ensure all properties are enumerable
+        // BLE transmission can create objects with non-enumerable properties
+        const normalizedToken = bundle.token ? {
+          symbol: bundle.token.symbol,
+          mint: bundle.token.mint,
+          decimals: bundle.token.decimals,
+          amount: bundle.token.amount,
+        } : null;
+
         const unsigned = {
           tx_id: bundle.tx_id,
           escrow_pda: bundle.escrow_pda,
-          token: bundle.token,
+          token: normalizedToken,
           payer_pubkey: bundle.payer_pubkey,
           merchant_pubkey: bundle.merchant_pubkey,
           nonce: bundle.nonce,
@@ -379,10 +800,8 @@ export function MerchantScreen() {
           throw new Error(`Failed to store receipt: ${errorMessage}`);
         }
 
-        // Update UI with merchant storage
-        const json = await EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY);
-        const payments: OfflineBundle[] = json ? JSON.parse(json) : [];
-        setReceivedPayments(payments);
+        await bundleTransactionManager.updateBundleState(signedBundle.tx_id, BundleState.QUEUED);
+        await loadReceivedPayments();
 
         Alert.alert(
           'Payment Received!',
@@ -396,7 +815,7 @@ export function MerchantScreen() {
         setLoading(false);
       }
     },
-    [decodeAttestationFromPayload]
+    [decodeAttestationFromPayload, loadReceivedPayments]
   );
 
   const generatePaymentQR = async () => {
@@ -455,46 +874,36 @@ export function MerchantScreen() {
         return;
       }
 
-      // Ensure BLE permissions then enable advertising/scanning for auto-receive
-      const ensureBlePermissions = async (): Promise<boolean> => {
-        if (Platform.OS !== 'android') return true;
-        try {
-          if (Platform.Version >= 31) {
-            const granted = await PermissionsAndroid.requestMultiple([
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-              PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-            ]);
-            const ok =
-              granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-              granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED &&
-              granted['android.permission.BLUETOOTH_ADVERTISE'] === PermissionsAndroid.RESULTS.GRANTED &&
-              granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED;
-            return ok;
-          } else {
-            const granted = await PermissionsAndroid.request(
-              PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-            );
-            return granted === PermissionsAndroid.RESULTS.GRANTED;
-          }
-        } catch (e) {
-          if (__DEV__) console.warn('[MerchantScreen] BLE permission request failed', e);
-          return false;
-        }
-      };
-
       try {
-        const ok = await ensureBlePermissions();
-        if (ok) {
-          await bleDirect.ensureActive(Config.ble.serviceUUID);
+        if (!merchantAddress) {
+          throw new Error('Merchant address not available');
         }
-        if (!meshUnsubscribe.current) {
-          const unsub = await bleDirect.subscribe(handleIncomingBundle, Config.ble.serviceUUID);
-          meshUnsubscribe.current = unsub;
-        }
+
+        await meshNetworkService.startBLENode({
+          serviceUUID: Config.ble.serviceUUID,
+          nodeType: 'merchant',
+          publicKey: merchantAddress,
+        }, { forceRestart: true });
+
+        await meshNetworkService.updatePaymentRequest({
+          merchantPubkey: merchantAddress,
+          merchantName: merchantPubkey.toBase58().slice(0, 8),
+          amount: Math.floor(amountValue * 1_000_000),
+          currency: qrPayload.currency,
+          description: qrPayload.display_amount,
+          displayAmount: qrPayload.display_amount,
+        });
+
+        console.log('[MerchantScreen] ✅ Native BLE GATT server started');
+        setIsAdvertising(true);
+        setBleStatus('Advertising');
       } catch (e) {
-        console.warn('[MerchantScreen] BLE ensureActive failed', e);
+        console.error('[MerchantScreen] ❌ Failed to start BLE node:', e);
+        Alert.alert(
+          'BLE Error',
+          'Failed to start Bluetooth advertising. Please check Bluetooth permissions.',
+          [{ text: 'OK' }]
+        );
       }
       setSheetStage('review');
       setSheetProgress(0);
@@ -517,242 +926,9 @@ export function MerchantScreen() {
     }
   };
 
-  const handleIncomingBundle = useCallback(
-    async (message: BLEBundleMessage) => {
-      const { bundle, payerAttestation } = message;
-      if (!payerAttestation) {
-        if (__DEV__) {
-          console.warn('Received bundle without payer attestation');
-        }
-        return;
-      }
-
-      const merchantPubkey = await wallet.loadWallet();
-      if (!merchantPubkey) {
-        return;
-      }
-
-      if (bundle.merchant_pubkey !== merchantPubkey.toBase58()) {
-        return;
-      }
-
-      if (payerAttestation.bundleId !== bundle.tx_id) {
-        if (__DEV__) {
-          console.warn('Payer attestation bundle mismatch', bundle.tx_id);
-        }
-        return;
-      }
-
-      try {
-        const payerPubkey = bs58.decode(bundle.payer_pubkey);
-        const merchantPubkeyBytes = bs58.decode(bundle.merchant_pubkey);
-        const verification = verifyCompletedBundle(bundle, payerPubkey, merchantPubkeyBytes);
-        if (!verification.payerValid) {
-          if (__DEV__) {
-            console.warn('Received mesh bundle with invalid payer signature', bundle.tx_id);
-          }
-          return;
-        }
-
-        const unsigned = {
-          tx_id: bundle.tx_id,
-          escrow_pda: bundle.escrow_pda,
-          token: bundle.token,
-          payer_pubkey: bundle.payer_pubkey,
-          merchant_pubkey: bundle.merchant_pubkey,
-          nonce: bundle.nonce,
-          timestamp: bundle.timestamp,
-          version: bundle.version,
-        };
-
-        const serialized = serializeBundle(unsigned);
-        const merchantSignature = await attestationService.signPayload(serialized, 'Sign payment receipt');
-
-        const signedBundle: OfflineBundle = {
-          ...bundle,
-          merchant_signature: merchantSignature,
-        };
-
-        const metadata = {
-          amount: signedBundle.token.amount,
-          currency: signedBundle.token.symbol,
-          merchantPubkey: signedBundle.merchant_pubkey,
-          payerPubkey: signedBundle.payer_pubkey,
-          nonce: signedBundle.nonce,
-          createdAt: signedBundle.timestamp,
-        };
-
-        // Use BundleTransactionManager for atomic receipt storage
-        let transaction;
-        try {
-          transaction = await bundleTransactionManager.storeReceivedBundle({
-            bundle: signedBundle,
-            metadata,
-            payerAttestation,
-          });
-
-          if (__DEV__) {
-            console.log(`Merchant receipt stored via mesh with transaction state: ${transaction.state}`);
-          }
-        } catch (err) {
-          // Bundle storage failed - transaction was rolled back
-          if (__DEV__) {
-            console.error('Failed to store merchant receipt from mesh:', err);
-          }
-          return;
-        }
-
-        // Update UI
-        const json = await EncryptedStorage.getItem(MERCHANT_RECEIVED_KEY);
-        const payments: OfflineBundle[] = json ? JSON.parse(json) : [];
-        setReceivedPayments(payments);
-
-        // Queue for mesh broadcast (best effort)
-        try {
-          await bleDirect.queueBundle(
-            signedBundle,
-            Config.ble.serviceUUID,
-            payerAttestation,
-            transaction.merchantAttestation
-          );
-
-          // Update transaction state to queued
-          await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.QUEUED);
-        } catch (err) {
-          if (__DEV__) {
-            console.error('Failed to broadcast signed bundle', err);
-          }
-        }
-
-        // Reload UI to show new payment
-        await loadReceivedPayments();
-
-        // Trigger auto-settlement if online
-        if (isOnline) {
-          console.log('[MerchantScreen] Triggering immediate auto-settlement for received bundle:', signedBundle.tx_id);
-          autoSettlementService.triggerSettlement().catch(err => {
-            console.error('[MerchantScreen] Auto-settlement trigger failed:', err);
-          });
-        }
-
-        // Update merchant escrow balance optimistically
-        const amountInUsdc = signedBundle.token.amount / 1_000_000;
-        setMerchantEscrowBalance(prev => prev + amountInUsdc);
-        console.log('[MerchantScreen] Merchant escrow balance updated optimistically: +', amountInUsdc, 'USDC');
-
-        // NEW: Show transaction success modal
-        setTxSuccessModal({
-          visible: true,
-          type: 'offline',
-          amount: signedBundle.token.amount / 1_000_000,
-          bundleId: signedBundle.tx_id,
-        });
-      } catch (err) {
-        if (__DEV__) {
-          console.error('Failed to process mesh bundle', err);
-        }
-      }
-    },
-    [loadReceivedPayments, isOnline]
-  );
-
-  const toggleMesh = async () => {
-    if (!meshEnabled) {
-      try {
-        setLoading(true);
-
-        // Request Bluetooth permissions on Android 12+ (API 31+)
-        if (Platform.OS === 'android' && Platform.Version >= 31) {
-          try {
-            const permissions = [
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-            ];
-
-            const granted = await PermissionsAndroid.requestMultiple(permissions);
-
-            // Check if all permissions were granted
-            const allGranted = permissions.every(
-              permission => granted[permission] === PermissionsAndroid.RESULTS.GRANTED
-            );
-
-            if (!allGranted) {
-              const deniedPerms = permissions.filter(
-                p => granted[p] !== PermissionsAndroid.RESULTS.GRANTED
-              ).map(p => p.split('.').pop()).join(', ');
-
-              Alert.alert(
-                'Permission Denied',
-                `Bluetooth permissions (${deniedPerms}) are required for mesh payments. Please enable them in Settings.`,
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Open Settings', onPress: () => {
-                      Alert.alert('Info', 'Go to Settings → Apps → Beam → Permissions → Nearby devices');
-                    },
-                  },
-                ]
-              );
-              return;
-            }
-          } catch (err) {
-            console.error('[MerchantScreen] Permission request error:', err);
-            Alert.alert('Error', 'Failed to request Bluetooth permissions');
-            return;
-          }
-        }
-
-        const merchantPubkey = await wallet.loadWallet();
-        if (!merchantPubkey) {
-          Alert.alert('Error', 'Wallet not loaded. Please go to Setup.');
-          return;
-        }
-
-        // NEW: Set role to merchant
-        bleConnectionManager.setRole('merchant');
-
-        // Show waiting for connection modal
-        setBleConnectionModal({ visible: true, status: 'searching' });
-
-        await bleDirect.ensureActive(Config.ble.serviceUUID);
-        const unsubscribe = await bleDirect.subscribe(handleIncomingBundle, Config.ble.serviceUUID);
-        meshUnsubscribe.current = unsubscribe;
-        setMeshEnabled(true);
-
-        // Setup BLE connection listener
-        const connListener = bleConnectionManager.addConnectionListener((event) => {
-          if (event.type === 'connected') {
-            console.log('[MerchantScreen] Customer connected:', event.peerName);
-            setBleConnectionModal({
-              visible: true,
-              status: 'connected',
-              peerName: event.peerName || 'Customer'
-            });
-
-            // REMOVED: Auto-hide timeout - user must tap "Continue" button
-            // Modal will close when user taps "Continue" button in the UI
-          }
-        });
-
-        Alert.alert('Bluetooth Enabled', 'Your device is now discoverable for offline payments via Bluetooth.\n\nWaiting for customer to connect...');
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        Alert.alert('Mesh Error', message);
-      } finally {
-        setLoading(false);
-      }
-    } else {
-      meshUnsubscribe.current?.();
-      meshUnsubscribe.current = null;
-      await bleDirect.stopBLENode();
-      setMeshEnabled(false);
-    }
-  };
-
-  const demonstratePaymentReceived = () => {
-    Alert.alert(
-      'How Beam Payments Work',
+const demonstratePaymentReceived = () => {
+  Alert.alert(
+    'How Beam Payments Work',
       '📱 STEP 1: Generate payment QR (you just did this!)\n\n' +
       '👤 STEP 2: Customer scans your QR code\n' +
       '   • Customer sees payment amount\n' +
@@ -765,12 +941,59 @@ export function MerchantScreen() {
       '   • Auto-received via Bluetooth, OR\n' +
       '   • Scan customer\'s bundle QR manually\n\n' +
       '💰 STEP 5: Settle on-chain when internet available\n\n' +
-      'TIP: Enable Bluetooth on BOTH devices for automatic payments!'
-    );
-  };
+    'TIP: Enable Bluetooth on BOTH devices for automatic payments!'
+  );
+};
 
-  const reportConflict = async (payment: OfflineBundle) => {
-    setDisputingId(payment.tx_id);
+  const handleShareReceipt = useCallback(
+    async (item: ReceivedBundleListItem) => {
+      try {
+        const payload = {
+          type: 'beam_bundle',
+          bundle: encodeOfflineBundle(item.bundle),
+        };
+        const base64 = await QRCodeGenerator.generate(JSON.stringify(payload), 380);
+        setFallbackModal({
+          visible: true,
+          imageBase64: base64,
+          bundleId: item.bundle.tx_id,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        Alert.alert('Failed to generate fallback QR', message);
+      }
+    },
+    [],
+  );
+
+  const handleRemoveReceipt = useCallback(
+    (item: ReceivedBundleListItem) => {
+      Alert.alert(
+        'Remove receipt',
+        'Removing this receipt deletes the local copy from this device. Only do this if it is no longer needed.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await bundleTransactionManager.deleteMerchantReceipt(item.bundle.tx_id);
+                await loadReceivedPayments();
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                Alert.alert('Remove failed', message);
+              }
+            },
+          },
+        ],
+      );
+    },
+    [loadReceivedPayments],
+  );
+
+  const reportConflict = async (item: ReceivedBundleListItem) => {
+    const payment = item.bundle;
     try {
       const signer = await wallet.getSigner('Report conflicting bundle');
       if (!signer) {
@@ -783,28 +1006,25 @@ export function MerchantScreen() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       Alert.alert('Report failed', message);
-    } finally {
-      setDisputingId(null);
     }
   };
 
-  const refresh = useCallback(async () => {
-    setRefreshing(true);
-    await loadReceivedPayments();
-    setRefreshing(false);
-  }, [loadReceivedPayments]);
+  const totalReceived = receivedPayments.reduce((sum, item) => sum + (item.bundle.token?.amount ?? 0) / 1_000_000, 0);
+  const queuedCount = receivedPayments.filter(item =>
+    item.state === BundleState.PENDING ||
+    item.state === BundleState.ATTESTED ||
+    item.state === BundleState.QUEUED ||
+    item.state === BundleState.BROADCAST
+  ).length;
+  const failedCount = receivedPayments.filter(item => item.state === BundleState.FAILED).length;
 
-  const totalReceived = receivedPayments.reduce((sum, p) => sum + p.token.amount / 1_000_000, 0);
 
-  const refreshControl = (
-    <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={palette.accentBlue} />
-  );
 
   const meshBadge = (
     <StatusBadge
-      status={isOnline ? 'online' : meshDiag.started ? 'pending' : 'offline'}
-      label={isOnline ? (settlementStatus || 'Online - Auto-settling') : meshDiag.started ? 'BLE Active - Offline' : 'Offline'}
-      icon={isOnline ? '🌐' : meshDiag.started ? '📡' : '📡'}
+      status={isOnline ? 'online' : isAdvertising ? 'pending' : 'offline'}
+      label={isOnline ? (settlementStatus || 'Online - Auto-settling') : isAdvertising ? 'BLE Active - Offline' : 'Offline'}
+      icon={isOnline ? '🌐' : isAdvertising ? '📡' : '📡'}
     />
   );
 
@@ -815,7 +1035,7 @@ export function MerchantScreen() {
       subtitle={
         isOnline
           ? 'Online - Accepting payments via Bluetooth. Auto-settling on Solana.'
-          : meshDiag.started
+          : isAdvertising
             ? 'Offline - Accepting payments via Bluetooth. Will auto-settle when online.'
             : 'Generate QR to accept offline payments. Bluetooth activates automatically.'
       }
@@ -832,9 +1052,7 @@ export function MerchantScreen() {
             <Small style={styles.labelMuted}>Total received</Small>
             <HeadingL>${totalReceived.toFixed(2)}</HeadingL>
             <Body style={styles.heroSub}>
-              {meshDiag.queueLength > 0
-                ? `${meshDiag.queueLength} bundle${meshDiag.queueLength === 1 ? '' : 's'} queued`
-                : 'Across offline receipts'}
+              {'Across offline receipts'}
             </Body>
           </Card>
         </View>
@@ -859,40 +1077,28 @@ export function MerchantScreen() {
           />
         </View>
 
-        {receivedPayments.length > 0 ? (
-          <View style={styles.bundleList}>
-            {receivedPayments.slice(0, 5).map(payment => (
-              <View key={payment.tx_id} style={styles.bundleRow}>
-                <View style={styles.bundleAvatar}>
-                  <Small style={styles.bundleEmoji}>✅</Small>
-                </View>
-                <View style={styles.bundleContent}>
-                  <HeadingM>{`$${(payment.token.amount / 1_000_000).toFixed(2)} USDC`}</HeadingM>
-                  <Body style={styles.bundleCopy}>
-                    {`Nonce ${payment.nonce} · ${new Date(payment.timestamp).toLocaleTimeString()}`}
-                  </Body>
-                </View>
-                <Button
-                  label={disputingId === payment.tx_id ? 'Reporting…' : 'Report issue'}
-                  variant="ghost"
-                  loading={disputingId === payment.tx_id}
-                  onPress={() => reportConflict(payment)}
-                  style={styles.disputeButton}
-                />
-              </View>
-            ))}
-            {receivedPayments.length > 5 ? (
-              <Small style={styles.moreLabel}>
-                {`+${receivedPayments.length - 5} additional receipt${receivedPayments.length - 5 === 1 ? '' : 's'}`}
-              </Small>
-            ) : null}
-          </View>
-        ) : (
-          <View style={styles.emptyState}>
-            <HeadingM>No receipts yet</HeadingM>
-            <Body style={styles.helperText}>Received payments appear here with attestation details.</Body>
-          </View>
-        )}
+        <Small style={styles.helperText}>
+          {queuedCount > 0
+            ? `${queuedCount} receipt${queuedCount === 1 ? '' : 's'} queued for settlement.`
+            : 'All receipts are settled or archived.'}
+          {failedCount > 0 ? ` ${failedCount} need manual review.` : ''}
+        </Small>
+
+        {failedCount > 0 ? (
+          <Card variant="highlight" style={styles.alertCard}>
+            <HeadingM style={styles.alertTitle}>Action recommended</HeadingM>
+            <Body style={styles.alertBody}>
+              {failedCount} receipt{failedCount === 1 ? '' : 's'} failed to settle. Open the receipt to retry, share the fallback QR, or remove it after resolution.
+            </Body>
+          </Card>
+        ) : null}
+
+        <ReceivedBundleList
+          items={receivedPayments}
+          onReport={reportConflict}
+          onShare={handleShareReceipt}
+          onRemove={handleRemoveReceipt}
+        />
       </Card>
     </Section>
   );
@@ -961,36 +1167,39 @@ export function MerchantScreen() {
           <View style={styles.meshHeaderContent}>
             <HeadingM>Automatic payments</HeadingM>
             <Body style={styles.helperText}>
-              Enable Bluetooth for automatic payment reception when customers are nearby.
+              Bluetooth advertising is active when a QR code is displayed.
             </Body>
           </View>
-          <Switch
-            value={meshEnabled}
-            onValueChange={toggleMesh}
-            trackColor={{ false: 'rgba(148,163,184,0.3)', true: 'rgba(99,102,241,0.5)' }}
-            thumbColor={meshEnabled ? '#fff' : '#e2e8f0'}
+          <StatusBadge
+            status={isAdvertising ? 'online' : 'offline'}
+            label={isAdvertising ? 'Advertising' : 'Inactive'}
+            icon={isAdvertising ? '📡' : '🛑'}
           />
         </View>
-        {meshDiag.started ? (
-          <View style={styles.meshStatus}>
-            <ActivityIndicator size="small" color={palette.accentBlue} />
-            <Body style={styles.helperText}>
-              {`Last success: ${meshDiag.lastSuccessAt ? new Date(meshDiag.lastSuccessAt).toLocaleTimeString() : '—'} · Queue: ${meshDiag.queueLength}`}
-            </Body>
-          </View>
-        ) : null}
-        {meshDiag.lastError ? (
-          <Body style={styles.helperText}>Last error: {meshDiag.lastError}</Body>
-        ) : null}
+        <Body style={styles.meshHelper}>
+          If customers can’t find you, keep this screen open, ensure Bluetooth is enabled, and review diagnostics for recent mesh events.
+        </Body>
+        <View style={styles.meshActions}>
+          <Button
+            label="Scan fallback bundle"
+            variant="secondary"
+            icon={<EmojiIcon symbol="📷" />}
+            onPress={() => setShowBundleScanner(true)}
+          />
+          <Button
+            label="Diagnostics"
+            variant="ghost"
+            icon={<EmojiIcon symbol="🛠️" />}
+            onPress={() => setDiagnosticsVisible(true)}
+          />
+        </View>
       </Card>
-      {/* Nearby Peers Discovery */}
-      {meshEnabled && meshDiag.started && <PeerDiscoveryView />}
     </>
   );
 
   return (
     <>
-      <Screen header={hero} refreshControl={refreshControl}>
+      <Screen header={hero} >
         {receiptsSection}
         {requestSection}
         {meshSection}
@@ -1041,10 +1250,11 @@ export function MerchantScreen() {
         peerName={bleConnectionModal.peerName}
         role="merchant"
         onConfirm={() => setBleConnectionModal({ ...bleConnectionModal, visible: false })}
-        onCancel={() => {
+        onCancel={async () => {
           setBleConnectionModal({ visible: false, status: 'searching' });
-          setMeshEnabled(false);
-          bleDirect.stopBLENode();
+          setIsAdvertising(false);
+          await meshNetworkService.stopBLENode();
+          setBleStatus('Idle');
         }}
       />
 
@@ -1058,8 +1268,48 @@ export function MerchantScreen() {
         bundleId={txSuccessModal.bundleId}
         onClose={() => {
           setTxSuccessModal({ ...txSuccessModal, visible: false });
-          loadReceivedPayments(); // Refresh received payments
+        void loadReceivedPayments(); // Refresh received payments
         }}
+      />
+
+      <Modal
+        visible={fallbackModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFallbackModal({ visible: false })}
+      >
+        <View style={styles.modalOverlay}>
+          <Card variant="glass" style={styles.fallbackModalCard}>
+            <HeadingM style={styles.modalTitle}>Share receipt QR</HeadingM>
+            <Body style={styles.fallbackDescription}>
+              Ask the customer or diagnostics device to scan this code if Bluetooth delivery failed.
+            </Body>
+            {fallbackModal.imageBase64 ? (
+              <Image
+                source={{ uri: `data:image/png;base64,${fallbackModal.imageBase64}` }}
+                style={styles.fallbackImage}
+              />
+            ) : (
+              <ActivityIndicator size="large" color={palette.accentBlue} style={{ marginVertical: spacing.lg }} />
+            )}
+            {fallbackModal.bundleId ? (
+              <Small style={styles.helperText}>
+                Bundle {fallbackModal.bundleId.slice(0, 6)}…{fallbackModal.bundleId.slice(-6)}
+              </Small>
+            ) : null}
+            <Button
+              label="Close"
+              variant="secondary"
+              onPress={() => setFallbackModal({ visible: false })}
+              style={{ marginTop: spacing.md }}
+            />
+          </Card>
+        </View>
+      </Modal>
+
+      <MeshDiagnosticsModal
+        visible={diagnosticsVisible}
+        onClose={() => setDiagnosticsVisible(false)}
       />
     </>
   );
@@ -1089,73 +1339,6 @@ const styles = StyleSheet.create({
   metricsRow: {
     flexDirection: 'row',
     gap: spacing.md,
-  },
-  bundleList: {
-    gap: spacing.md,
-  },
-  bundleRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-    alignItems: 'center',
-    paddingVertical: spacing.xs,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(148,163,184,0.15)',
-  },
-  bundleAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: 'rgba(22,78,99,0.35)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  bundleEmoji: {
-    fontSize: 18,
-  },
-  bundleCopy: {
-    color: palette.textSecondary,
-  },
-  bundleContent: {
-    flex: 1,
-    gap: spacing.xs,
-  },
-  moreLabel: {
-    alignSelf: 'flex-end',
-    color: 'rgba(148,163,184,0.82)',
-  },
-  disputeButton: {
-    alignSelf: 'center',
-    minWidth: 140,
-  },
-  emptyState: {
-    padding: spacing.xl,
-    borderRadius: radius.md,
-    backgroundColor: 'rgba(56,189,248,0.12)',
-    gap: spacing.md,
-    alignItems: 'center',
-  },
-  emptyIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(56, 189, 248, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: spacing.sm,
-  },
-  emptyTitle: {
-    color: palette.textPrimary,
-    textAlign: 'center',
-  },
-  emptyActions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    width: '100%',
-    marginTop: spacing.sm,
-  },
-  emptyButton: {
-    flex: 1,
-    minHeight: 48,
   },
   requestCard: {
     gap: spacing.lg,
@@ -1213,13 +1396,26 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: spacing.xs,
   },
-  meshStatus: {
+  meshHelper: {
+    color: 'rgba(148,163,184,0.82)',
+  },
+  meshActions: {
     flexDirection: 'row',
     gap: spacing.sm,
-    alignItems: 'center',
+    flexWrap: 'wrap',
   },
   helperText: {
     color: 'rgba(148,163,184,0.82)',
+  },
+  alertCard: {
+    marginTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  alertTitle: {
+    color: palette.textPrimary,
+  },
+  alertBody: {
+    color: palette.textSecondary,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1237,11 +1433,34 @@ const styles = StyleSheet.create({
   loadingBody: {
     color: palette.textSecondary,
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.xl,
+  },
   statusCard: {
     gap: spacing.md,
   },
   statusText: {
     color: palette.textPrimary,
     textAlign: 'center',
+  },
+  fallbackModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    gap: spacing.md,
+    padding: spacing.xl,
+    alignItems: 'center',
+  },
+  fallbackDescription: {
+    color: palette.textSecondary,
+    textAlign: 'center',
+  },
+  fallbackImage: {
+    width: 240,
+    height: 240,
+    marginVertical: spacing.md,
   },
 });

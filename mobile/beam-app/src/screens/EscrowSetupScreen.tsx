@@ -146,7 +146,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
         </Card>
       </Section>
 
-      <Section title={escrowExists ? "Add funds to escrow" : "Initial escrow amount"}>
+      <Section title={escrowExists ? 'Add funds to escrow' : 'Initial escrow amount'}>
         <Card>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Micro>USDC AMOUNT</Micro>
@@ -193,7 +193,7 @@ export function EscrowSetupScreen({ navigation }: EscrowSetupScreenProps) {
       {/* Payment sheet */}
       <PaymentSheet
         visible={showSheet}
-        title={escrowExists ? "Fund Escrow" : "Create Escrow"}
+        title={escrowExists ? 'Fund Escrow' : 'Create Escrow'}
         subtitle={walletUsdc != null && escrowUsdc != null ? `Wallet ${walletUsdc.toFixed(2)} USDC → Escrow ${escrowUsdc.toFixed(2)} USDC` : (escrowExists ? 'Add funds to escrow' : 'Confirm escrow creation')}
         amountLabel={`${parseFloat(initialAmount || '0').toFixed(2)} USDC`}
         onCancel={() => setShowSheet(false)}

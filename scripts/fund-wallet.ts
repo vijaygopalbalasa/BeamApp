@@ -15,7 +15,13 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
+import bs58 from 'bs58';
+import * as dotenv from 'dotenv';
+import * as path from 'path';
 import { mintUsdc, loadMintAuthority } from './mint-usdc';
+
+// Load environment variables from root .env file
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const NETWORK = 'devnet';
 
@@ -27,8 +33,13 @@ async function sendSol(
 
   const connection = new Connection(clusterApiUrl(NETWORK), 'confirmed');
 
-  // Load the mint authority (which has SOL) as the payer
-  const payer = await loadMintAuthority();
+  // Load payer from environment variable
+  const payerPrivateKey = process.env.SOLANA_WALLET_PRIVATE_KEY;
+  if (!payerPrivateKey) {
+    throw new Error('SOLANA_WALLET_PRIVATE_KEY not found in .env file');
+  }
+
+  const payer = Keypair.fromSecretKey(bs58.decode(payerPrivateKey));
   console.log(`✓ Payer: ${payer.publicKey.toBase58()}`);
 
   const recipient = new PublicKey(recipientAddress);

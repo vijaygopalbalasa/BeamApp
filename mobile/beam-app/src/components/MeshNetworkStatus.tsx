@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Animated, Easing } from 'react-native';
-import { bleDirect } from '../services/BLEDirectService';
-import type { BLEDiagnostics } from '../services/BLEDirectService';
+import { bleService } from '../services/BLEService';
 import { Card } from './ui/Card';
 import { HeadingM, Body, Small } from './ui/Typography';
 import { StatusBadge } from './ui/StatusBadge';
@@ -9,20 +8,25 @@ import { palette, spacing } from '../design/tokens';
 
 interface MeshNetworkStatusProps {
   onPeerCountChange?: (count: number) => void;
+  isAdvertising?: boolean;
+  isScanning?: boolean;
+  connectedPeers?: number;
+  statusLabelOverride?: string;
 }
 
-export const MeshNetworkStatus: React.FC<MeshNetworkStatusProps> = ({ onPeerCountChange }) => {
-  const [diagnostics, setDiagnostics] = useState<BLEDiagnostics>(bleDirect.getDiagnostics());
+export const MeshNetworkStatus: React.FC<MeshNetworkStatusProps> = ({
+  onPeerCountChange: _onPeerCountChange,
+  isAdvertising = false,
+  isScanning = false,
+  connectedPeers = 0,
+  statusLabelOverride,
+}) => {
+  const [bluetoothEnabled, setBluetoothEnabled] = useState(false);
   const [pulseAnim] = useState(new Animated.Value(0));
 
   useEffect(() => {
-    // Subscribe to diagnostics updates
-    const unsubscribe = bleDirect.addDiagnosticsListener((diag) => {
-      setDiagnostics(diag);
-      if (onPeerCountChange) {
-        onPeerCountChange(0); // Will be updated when we add peer tracking
-      }
-    });
+    // Check bluetooth status
+    bleService.isBluetoothEnabled().then(setBluetoothEnabled);
 
     // Start pulse animation
     Animated.loop(
@@ -41,11 +45,7 @@ export const MeshNetworkStatus: React.FC<MeshNetworkStatusProps> = ({ onPeerCoun
         }),
       ])
     ).start();
-
-    return () => {
-      unsubscribe();
-    };
-  }, [onPeerCountChange, pulseAnim]);
+  }, [pulseAnim]);
 
   const pulseOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
@@ -57,10 +57,18 @@ export const MeshNetworkStatus: React.FC<MeshNetworkStatusProps> = ({ onPeerCoun
     outputRange: [0.95, 1.05],
   });
 
-  const isActive = diagnostics.started;
-  const hasRecentActivity = diagnostics.lastBroadcastAt
-    ? Date.now() - diagnostics.lastBroadcastAt < 10000
-    : false;
+  const isActive = bluetoothEnabled && (isAdvertising || isScanning);
+  const secondaryLabel = statusLabelOverride
+    ? statusLabelOverride
+    : isActive
+      ? connectedPeers > 0
+        ? `${connectedPeers} peer${connectedPeers === 1 ? '' : 's'}`
+        : isAdvertising
+          ? 'Advertising'
+          : 'Scanning'
+      : bluetoothEnabled
+        ? 'Idle'
+        : 'Bluetooth off';
 
   return (
     <Card variant="glass" padding="md" style={styles.container}>
@@ -80,7 +88,7 @@ export const MeshNetworkStatus: React.FC<MeshNetworkStatusProps> = ({ onPeerCoun
         </View>
         <StatusBadge
           status={isActive ? 'online' : 'offline'}
-          label={isActive ? 'Active' : 'Inactive'}
+          label={isActive ? secondaryLabel : secondaryLabel}
           icon={isActive ? '📡' : '⏸️'}
         />
       </View>
@@ -88,36 +96,28 @@ export const MeshNetworkStatus: React.FC<MeshNetworkStatusProps> = ({ onPeerCoun
       {isActive && (
         <View style={styles.metrics}>
           <View style={styles.metric}>
-            <Small style={styles.metricLabel}>Queue</Small>
-            <Body style={styles.metricValue}>{diagnostics.queueLength}</Body>
+            <Small style={styles.metricLabel}>Mode</Small>
+            <Body style={styles.metricValue}>
+              {isAdvertising ? '📡 Advertising' : '🔍 Scanning'}
+            </Body>
           </View>
 
           <View style={styles.divider} />
 
           <View style={styles.metric}>
-            <Small style={styles.metricLabel}>Activity</Small>
+            <Small style={styles.metricLabel}>Status</Small>
             <Body style={styles.metricValue}>
-              {hasRecentActivity ? '🟢 Recent' : '⚪ Idle'}
+              {connectedPeers > 0 ? `🟢 ${connectedPeers} connected` : '🟡 Waiting'}
             </Body>
           </View>
-
-          {diagnostics.lastError && (
-            <>
-              <View style={styles.divider} />
-              <View style={styles.metric}>
-                <Small style={styles.metricLabel}>Status</Small>
-                <Body style={[styles.metricValue, styles.errorText]}>
-                  ⚠️ {diagnostics.lastError.substring(0, 20)}...
-                </Body>
-              </View>
-            </>
-          )}
         </View>
       )}
 
       {!isActive && (
         <Small style={styles.inactiveText}>
-          Enable mesh payments to broadcast bundles offline
+          {!bluetoothEnabled
+            ? 'Enable Bluetooth to use BLE payments'
+            : 'Start scanning or advertising to connect'}
         </Small>
       )}
     </Card>

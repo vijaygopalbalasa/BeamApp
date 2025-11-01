@@ -3,23 +3,39 @@ import { sha256 } from '@noble/hashes/sha256';
 import { keccak_256 } from '@noble/hashes/sha3';
 import type { OfflineBundle } from './types';
 
+type CanonicalValue = null | boolean | number | string | CanonicalValue[] | { [key: string]: CanonicalValue };
+
 /**
  * Create canonical serialization of bundle for signing
+ * Explicitly constructs canonical structure to avoid Object.keys() issues with BLE-transmitted objects
  */
 export function serializeBundle(bundle: Omit<OfflineBundle, 'payer_signature' | 'merchant_signature'>): Uint8Array {
-  const data = {
-    tx_id: bundle.tx_id,
+  // Explicitly extract and normalize token to handle non-enumerable properties from BLE
+  // CRITICAL: Key order MUST match createUnsignedBundle() - symbol, mint, decimals, amount
+  // JSON.stringify preserves insertion order (ES6+), so different order = different signature!
+  const normalizedToken = bundle.token ? {
+    symbol: String(bundle.token.symbol || 'USDC'),
+    mint: String(bundle.token.mint || ''),
+    decimals: Number(bundle.token.decimals || 0),
+    amount: Number(bundle.token.amount || 0),
+  } : null;
+
+  // Create canonical structure with sorted keys
+  const canonical = {
     escrow_pda: bundle.escrow_pda,
-    token: bundle.token,
-    payer_pubkey: bundle.payer_pubkey,
     merchant_pubkey: bundle.merchant_pubkey,
     nonce: bundle.nonce,
+    payer_pubkey: bundle.payer_pubkey,
     timestamp: bundle.timestamp,
+    token: normalizedToken,
+    tx_id: bundle.tx_id,
     version: bundle.version,
   };
 
-  const json = JSON.stringify(data, Object.keys(data).sort());
-  return new TextEncoder().encode(json);
+  // Use plain JSON.stringify - object already has sorted keys
+  const canonicalJson = JSON.stringify(canonical);
+
+  return new TextEncoder().encode(canonicalJson);
 }
 
 /**
@@ -28,6 +44,8 @@ export function serializeBundle(bundle: Omit<OfflineBundle, 'payer_signature' | 
 export function signBundle(bundle: Omit<OfflineBundle, 'payer_signature' | 'merchant_signature'>, privateKey: Uint8Array): Uint8Array {
   const message = serializeBundle(bundle);
   const messageHash = sha256(message);
+  console.log('[signBundle] Canonical JSON:', new TextDecoder().decode(message));
+  console.log('[signBundle] Message hash (hex):', Buffer.from(messageHash).toString('hex'));
   return ed25519.sign(messageHash, privateKey);
 }
 
@@ -41,6 +59,9 @@ export function verifyBundleSignature(
 ): boolean {
   const message = serializeBundle(bundle);
   const messageHash = sha256(message);
+  console.log('[verifyBundleSignature] Canonical JSON:', new TextDecoder().decode(message));
+  console.log('[verifyBundleSignature] Message hash (hex):', Buffer.from(messageHash).toString('hex'));
+  console.log('[verifyBundleSignature] Signature (hex):', Buffer.from(signature).toString('hex'));
   return ed25519.verify(signature, messageHash, publicKey);
 }
 

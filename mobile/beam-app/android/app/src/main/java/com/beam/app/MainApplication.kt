@@ -14,7 +14,6 @@ import com.facebook.soloader.SoLoader
 import com.beam.app.modules.SecureStorageBridgePackage
 import com.beam.app.modules.QRScannerPackage
 import com.beam.app.modules.QRCodeGeneratorPackage
-import com.beam.app.bridge.BLEPeripheralPackage
 import com.beam.app.bridge.MeshNetworkPackage
 import com.beam.app.bridge.PlayIntegrityPackage
 
@@ -29,7 +28,7 @@ class MainApplication : Application(), ReactApplication {
               add(SecureStorageBridgePackage())
               add(QRScannerPackage())
               add(QRCodeGeneratorPackage())
-              add(BLEPeripheralPackage())
+              // Removed BLEPeripheralPackage()
               add(MeshNetworkPackage())
               add(PlayIntegrityPackage())
             }

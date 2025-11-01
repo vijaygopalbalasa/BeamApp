@@ -5,20 +5,20 @@
  * IDL can be found at `target/idl/beam.json`.
  */
 export type Beam = {
-  "address": "6BjVpGR1pGJ41xDJF4mMuvC7vymFBZ8QXxoRKFqsuDDi",
-  "metadata": {
-    "name": "beam",
-    "version": "0.1.0",
-    "spec": "0.1.0",
-    "description": "Beam - Offline-first P2P payments with escrow on Solana"
+  'address': '6BjVpGR1pGJ41xDJF4mMuvC7vymFBZ8QXxoRKFqsuDDi',
+  'metadata': {
+    'name': 'beam',
+    'version': '0.1.0',
+    'spec': '0.1.0',
+    'description': 'Beam - Offline-first P2P payments with escrow on Solana'
   },
-  "instructions": [
+  'instructions': [
     {
-      "name": "fundEscrow",
-      "docs": [
-        "Add funds to existing escrow"
+      'name': 'fundEscrow',
+      'docs': [
+        'Add funds to existing escrow'
       ],
-      "discriminator": [
+      'discriminator': [
         155,
         18,
         218,
@@ -28,15 +28,15 @@ export type Beam = {
         69,
         201
       ],
-      "accounts": [
+      'accounts': [
         {
-          "name": "escrowAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'escrowAccount',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   101,
                   115,
                   99,
@@ -46,46 +46,46 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "owner"
+                'kind': 'account',
+                'path': 'owner'
               }
             ]
           }
         },
         {
-          "name": "owner",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "escrowAccount"
+          'name': 'owner',
+          'writable': true,
+          'signer': true,
+          'relations': [
+            'escrowAccount'
           ]
         },
         {
-          "name": "ownerTokenAccount",
-          "writable": true
+          'name': 'ownerTokenAccount',
+          'writable': true
         },
         {
-          "name": "escrowTokenAccount",
-          "writable": true
+          'name': 'escrowTokenAccount',
+          'writable': true
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          'name': 'tokenProgram',
+          'address': 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
         }
       ],
-      "args": [
+      'args': [
         {
-          "name": "amount",
-          "type": "u64"
+          'name': 'amount',
+          'type': 'u64'
         }
       ]
     },
     {
-      "name": "initializeEscrow",
-      "docs": [
-        "Initialize escrow account for offline payments"
+      'name': 'initializeEscrow',
+      'docs': [
+        'Initialize escrow account for offline payments'
       ],
-      "discriminator": [
+      'discriminator': [
         243,
         160,
         77,
@@ -95,15 +95,15 @@ export type Beam = {
         48,
         209
       ],
-      "accounts": [
+      'accounts': [
         {
-          "name": "escrowAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'escrowAccount',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   101,
                   115,
                   99,
@@ -113,47 +113,47 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "owner"
+                'kind': 'account',
+                'path': 'owner'
               }
             ]
           }
         },
         {
-          "name": "owner",
-          "writable": true,
-          "signer": true
+          'name': 'owner',
+          'writable': true,
+          'signer': true
         },
         {
-          "name": "ownerTokenAccount",
-          "writable": true
+          'name': 'ownerTokenAccount',
+          'writable': true
         },
         {
-          "name": "escrowTokenAccount",
-          "writable": true
+          'name': 'escrowTokenAccount',
+          'writable': true
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          'name': 'tokenProgram',
+          'address': 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
         },
         {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
+          'name': 'systemProgram',
+          'address': '11111111111111111111111111111111'
         }
       ],
-      "args": [
+      'args': [
         {
-          "name": "initialAmount",
-          "type": "u64"
+          'name': 'initialAmount',
+          'type': 'u64'
         }
       ]
     },
     {
-      "name": "initializeNonceRegistry",
-      "docs": [
-        "Initialize nonce registry for payer"
+      'name': 'initializeNonceRegistry',
+      'docs': [
+        'Initialize nonce registry for payer'
       ],
-      "discriminator": [
+      'discriminator': [
         34,
         149,
         53,
@@ -163,20 +163,20 @@ export type Beam = {
         88,
         85
       ],
-      "accounts": [
+      'accounts': [
         {
-          "name": "payer",
-          "writable": true,
-          "signer": true
+          'name': 'payer',
+          'writable': true,
+          'signer': true
         },
         {
-          "name": "nonceRegistry",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'nonceRegistry',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   110,
                   111,
                   110,
@@ -185,25 +185,25 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "payer"
+                'kind': 'account',
+                'path': 'payer'
               }
             ]
           }
         },
         {
-          "name": "systemProgram",
-          "address": "11111111111111111111111111111111"
+          'name': 'systemProgram',
+          'address': '11111111111111111111111111111111'
         }
       ],
-      "args": []
+      'args': []
     },
     {
-      "name": "reportFraudulentBundle",
-      "docs": [
-        "Report conflicting bundle evidence to initiate a fraud dispute"
+      'name': 'reportFraudulentBundle',
+      'docs': [
+        'Report conflicting bundle evidence to initiate a fraud dispute'
       ],
-      "discriminator": [
+      'discriminator': [
         42,
         97,
         16,
@@ -213,15 +213,15 @@ export type Beam = {
         213,
         89
       ],
-      "accounts": [
+      'accounts': [
         {
-          "name": "nonceRegistry",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'nonceRegistry',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   110,
                   111,
                   110,
@@ -230,20 +230,20 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "payer"
+                'kind': 'account',
+                'path': 'payer'
               }
             ]
           }
         },
         {
-          "name": "escrowAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'escrowAccount',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   101,
                   115,
                   99,
@@ -253,50 +253,50 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "payer"
+                'kind': 'account',
+                'path': 'payer'
               }
             ]
           }
         },
         {
-          "name": "payer"
+          'name': 'payer'
         },
         {
-          "name": "reporter",
-          "signer": true
+          'name': 'reporter',
+          'signer': true
         }
       ],
-      "args": [
+      'args': [
         {
-          "name": "bundleId",
-          "type": "string"
+          'name': 'bundleId',
+          'type': 'string'
         },
         {
-          "name": "conflictingHash",
-          "type": {
-            "array": [
-              "u8",
+          'name': 'conflictingHash',
+          'type': {
+            'array': [
+              'u8',
               32
             ]
           }
         },
         {
-          "name": "reason",
-          "type": {
-            "defined": {
-              "name": "fraudReason"
+          'name': 'reason',
+          'type': {
+            'defined': {
+              'name': 'fraudReason'
             }
           }
         }
       ]
     },
     {
-      "name": "settleOfflinePayment",
-      "docs": [
-        "Settle offline payment (called when either party goes online)"
+      'name': 'settleOfflinePayment',
+      'docs': [
+        'Settle offline payment (called when either party goes online)'
       ],
-      "discriminator": [
+      'discriminator': [
         48,
         91,
         112,
@@ -306,15 +306,15 @@ export type Beam = {
         142,
         80
       ],
-      "accounts": [
+      'accounts': [
         {
-          "name": "escrowAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'escrowAccount',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   101,
                   115,
                   99,
@@ -324,42 +324,42 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "payer"
+                'kind': 'account',
+                'path': 'payer'
               }
             ]
           }
         },
         {
-          "name": "owner",
-          "relations": [
-            "escrowAccount",
-            "nonceRegistry"
+          'name': 'owner',
+          'relations': [
+            'escrowAccount',
+            'nonceRegistry'
           ]
         },
         {
-          "name": "payer",
-          "signer": true
+          'name': 'payer',
+          'signer': true
         },
         {
-          "name": "merchant"
+          'name': 'merchant'
         },
         {
-          "name": "escrowTokenAccount",
-          "writable": true
+          'name': 'escrowTokenAccount',
+          'writable': true
         },
         {
-          "name": "merchantTokenAccount",
-          "writable": true
+          'name': 'merchantTokenAccount',
+          'writable': true
         },
         {
-          "name": "nonceRegistry",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'nonceRegistry',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   110,
                   111,
                   110,
@@ -368,46 +368,46 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "payer"
+                'kind': 'account',
+                'path': 'payer'
               }
             ]
           }
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          'name': 'tokenProgram',
+          'address': 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
         }
       ],
-      "args": [
+      'args': [
         {
-          "name": "amount",
-          "type": "u64"
+          'name': 'amount',
+          'type': 'u64'
         },
         {
-          "name": "payerNonce",
-          "type": "u64"
+          'name': 'payerNonce',
+          'type': 'u64'
         },
         {
-          "name": "bundleId",
-          "type": "string"
+          'name': 'bundleId',
+          'type': 'string'
         },
         {
-          "name": "evidence",
-          "type": {
-            "defined": {
-              "name": "settlementEvidence"
+          'name': 'evidence',
+          'type': {
+            'defined': {
+              'name': 'settlementEvidence'
             }
           }
         }
       ]
     },
     {
-      "name": "withdrawEscrow",
-      "docs": [
-        "Withdraw unused escrow funds"
+      'name': 'withdrawEscrow',
+      'docs': [
+        'Withdraw unused escrow funds'
       ],
-      "discriminator": [
+      'discriminator': [
         81,
         84,
         226,
@@ -417,15 +417,15 @@ export type Beam = {
         96,
         104
       ],
-      "accounts": [
+      'accounts': [
         {
-          "name": "escrowAccount",
-          "writable": true,
-          "pda": {
-            "seeds": [
+          'name': 'escrowAccount',
+          'writable': true,
+          'pda': {
+            'seeds': [
               {
-                "kind": "const",
-                "value": [
+                'kind': 'const',
+                'value': [
                   101,
                   115,
                   99,
@@ -435,45 +435,45 @@ export type Beam = {
                 ]
               },
               {
-                "kind": "account",
-                "path": "owner"
+                'kind': 'account',
+                'path': 'owner'
               }
             ]
           }
         },
         {
-          "name": "owner",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "escrowAccount"
+          'name': 'owner',
+          'writable': true,
+          'signer': true,
+          'relations': [
+            'escrowAccount'
           ]
         },
         {
-          "name": "ownerTokenAccount",
-          "writable": true
+          'name': 'ownerTokenAccount',
+          'writable': true
         },
         {
-          "name": "escrowTokenAccount",
-          "writable": true
+          'name': 'escrowTokenAccount',
+          'writable': true
         },
         {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+          'name': 'tokenProgram',
+          'address': 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'
         }
       ],
-      "args": [
+      'args': [
         {
-          "name": "amount",
-          "type": "u64"
+          'name': 'amount',
+          'type': 'u64'
         }
       ]
     }
   ],
-  "accounts": [
+  'accounts': [
     {
-      "name": "nonceRegistry",
-      "discriminator": [
+      'name': 'nonceRegistry',
+      'discriminator': [
         115,
         114,
         189,
@@ -485,8 +485,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "offlineEscrowAccount",
-      "discriminator": [
+      'name': 'offlineEscrowAccount',
+      'discriminator': [
         40,
         240,
         18,
@@ -498,10 +498,10 @@ export type Beam = {
       ]
     }
   ],
-  "events": [
+  'events': [
     {
-      "name": "bundleHistoryRecorded",
-      "discriminator": [
+      'name': 'bundleHistoryRecorded',
+      'discriminator': [
         236,
         67,
         228,
@@ -513,8 +513,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "escrowFunded",
-      "discriminator": [
+      'name': 'escrowFunded',
+      'discriminator': [
         228,
         243,
         166,
@@ -526,8 +526,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "escrowInitialized",
-      "discriminator": [
+      'name': 'escrowInitialized',
+      'discriminator': [
         222,
         186,
         157,
@@ -539,8 +539,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "escrowWithdrawn",
-      "discriminator": [
+      'name': 'escrowWithdrawn',
+      'discriminator': [
         43,
         206,
         174,
@@ -552,8 +552,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "fraudEvidenceSubmitted",
-      "discriminator": [
+      'name': 'fraudEvidenceSubmitted',
+      'discriminator': [
         227,
         24,
         222,
@@ -565,8 +565,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "fraudPenaltyApplied",
-      "discriminator": [
+      'name': 'fraudPenaltyApplied',
+      'discriminator': [
         124,
         139,
         238,
@@ -578,8 +578,8 @@ export type Beam = {
       ]
     },
     {
-      "name": "paymentSettled",
-      "discriminator": [
+      'name': 'paymentSettled',
+      'discriminator': [
         158,
         182,
         152,
@@ -591,121 +591,121 @@ export type Beam = {
       ]
     }
   ],
-  "errors": [
+  'errors': [
     {
-      "code": 6000,
-      "name": "invalidAmount",
-      "msg": "Invalid amount specified"
+      'code': 6000,
+      'name': 'invalidAmount',
+      'msg': 'Invalid amount specified'
     },
     {
-      "code": 6001,
-      "name": "insufficientFunds",
-      "msg": "Insufficient funds in escrow"
+      'code': 6001,
+      'name': 'insufficientFunds',
+      'msg': 'Insufficient funds in escrow'
     },
     {
-      "code": 6002,
-      "name": "invalidNonce",
-      "msg": "Invalid nonce (must be > last_nonce)"
+      'code': 6002,
+      'name': 'invalidNonce',
+      'msg': 'Invalid nonce (must be > last_nonce)'
     },
     {
-      "code": 6003,
-      "name": "invalidEscrowTokenAccount",
-      "msg": "Escrow token account owner must be the escrow PDA"
+      'code': 6003,
+      'name': 'invalidEscrowTokenAccount',
+      'msg': 'Escrow token account owner must be the escrow PDA'
     },
     {
-      "code": 6004,
-      "name": "invalidOwner",
-      "msg": "Invalid owner"
+      'code': 6004,
+      'name': 'invalidOwner',
+      'msg': 'Invalid owner'
     },
     {
-      "code": 6005,
-      "name": "missingAttestation",
-      "msg": "Attestation required"
+      'code': 6005,
+      'name': 'missingAttestation',
+      'msg': 'Attestation required'
     },
     {
-      "code": 6006,
-      "name": "invalidAttestation",
-      "msg": "Invalid attestation provided"
+      'code': 6006,
+      'name': 'invalidAttestation',
+      'msg': 'Invalid attestation provided'
     },
     {
-      "code": 6007,
-      "name": "invalidBundleId",
-      "msg": "Invalid bundle identifier"
+      'code': 6007,
+      'name': 'invalidBundleId',
+      'msg': 'Invalid bundle identifier'
     },
     {
-      "code": 6008,
-      "name": "duplicateBundle",
-      "msg": "Duplicate bundle detected"
+      'code': 6008,
+      'name': 'duplicateBundle',
+      'msg': 'Duplicate bundle detected'
     },
     {
-      "code": 6009,
-      "name": "invalidBundleHash",
-      "msg": "Invalid bundle hash"
+      'code': 6009,
+      'name': 'invalidBundleHash',
+      'msg': 'Invalid bundle hash'
     },
     {
-      "code": 6010,
-      "name": "bundleHistoryNotFound",
-      "msg": "Bundle history not found"
+      'code': 6010,
+      'name': 'bundleHistoryNotFound',
+      'msg': 'Bundle history not found'
     },
     {
-      "code": 6011,
-      "name": "fraudHashMatches",
-      "msg": "Conflicting hash matches settled bundle"
+      'code': 6011,
+      'name': 'fraudHashMatches',
+      'msg': 'Conflicting hash matches settled bundle'
     },
     {
-      "code": 6012,
-      "name": "fraudEvidenceExists",
-      "msg": "Fraud evidence already exists"
+      'code': 6012,
+      'name': 'fraudEvidenceExists',
+      'msg': 'Fraud evidence already exists'
     },
     {
-      "code": 6013,
-      "name": "overflow",
-      "msg": "Arithmetic overflow"
+      'code': 6013,
+      'name': 'overflow',
+      'msg': 'Arithmetic overflow'
     },
     {
-      "code": 6014,
-      "name": "underflow",
-      "msg": "Arithmetic underflow"
+      'code': 6014,
+      'name': 'underflow',
+      'msg': 'Arithmetic underflow'
     },
     {
-      "code": 6015,
-      "name": "insufficientFundsForSlash",
-      "msg": "Insufficient funds for slash penalty"
+      'code': 6015,
+      'name': 'insufficientFundsForSlash',
+      'msg': 'Insufficient funds for slash penalty'
     }
   ],
-  "types": [
+  'types': [
     {
-      "name": "attestationProof",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'attestationProof',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "attestationRoot",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'attestationRoot',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "attestationNonce",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'attestationNonce',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "attestationTimestamp",
-            "type": "i64"
+            'name': 'attestationTimestamp',
+            'type': 'i64'
           },
           {
-            "name": "verifierSignature",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'verifierSignature',
+            'type': {
+              'array': [
+                'u8',
                 64
               ]
             }
@@ -714,254 +714,254 @@ export type Beam = {
       }
     },
     {
-      "name": "bundleHistoryRecorded",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'bundleHistoryRecorded',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "payer",
-            "type": "pubkey"
+            'name': 'payer',
+            'type': 'pubkey'
           },
           {
-            "name": "merchant",
-            "type": "pubkey"
+            'name': 'merchant',
+            'type': 'pubkey'
           },
           {
-            "name": "bundleHash",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'bundleHash',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "amount",
-            "type": "u64"
+            'name': 'amount',
+            'type': 'u64'
           },
           {
-            "name": "nonce",
-            "type": "u64"
+            'name': 'nonce',
+            'type': 'u64'
           },
           {
-            "name": "settledAt",
-            "type": "i64"
+            'name': 'settledAt',
+            'type': 'i64'
           }
         ]
       }
     },
     {
-      "name": "bundleRecord",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'bundleRecord',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "bundleHash",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'bundleHash',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "merchant",
-            "type": "pubkey"
+            'name': 'merchant',
+            'type': 'pubkey'
           },
           {
-            "name": "amount",
-            "type": "u64"
+            'name': 'amount',
+            'type': 'u64'
           },
           {
-            "name": "settledAt",
-            "type": "i64"
+            'name': 'settledAt',
+            'type': 'i64'
           },
           {
-            "name": "nonce",
-            "type": "u64"
+            'name': 'nonce',
+            'type': 'u64'
           }
         ]
       }
     },
     {
-      "name": "escrowFunded",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'escrowFunded',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "owner",
-            "type": "pubkey"
+            'name': 'owner',
+            'type': 'pubkey'
           },
           {
-            "name": "amount",
-            "type": "u64"
+            'name': 'amount',
+            'type': 'u64'
           },
           {
-            "name": "newBalance",
-            "type": "u64"
+            'name': 'newBalance',
+            'type': 'u64'
           }
         ]
       }
     },
     {
-      "name": "escrowInitialized",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'escrowInitialized',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "owner",
-            "type": "pubkey"
+            'name': 'owner',
+            'type': 'pubkey'
           },
           {
-            "name": "initialBalance",
-            "type": "u64"
+            'name': 'initialBalance',
+            'type': 'u64'
           }
         ]
       }
     },
     {
-      "name": "escrowWithdrawn",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'escrowWithdrawn',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "owner",
-            "type": "pubkey"
+            'name': 'owner',
+            'type': 'pubkey'
           },
           {
-            "name": "amount",
-            "type": "u64"
+            'name': 'amount',
+            'type': 'u64'
           },
           {
-            "name": "remainingBalance",
-            "type": "u64"
+            'name': 'remainingBalance',
+            'type': 'u64'
           }
         ]
       }
     },
     {
-      "name": "fraudEvidenceSubmitted",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'fraudEvidenceSubmitted',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "payer",
-            "type": "pubkey"
+            'name': 'payer',
+            'type': 'pubkey'
           },
           {
-            "name": "reporter",
-            "type": "pubkey"
+            'name': 'reporter',
+            'type': 'pubkey'
           },
           {
-            "name": "bundleHash",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'bundleHash',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "conflictingHash",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'conflictingHash',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "reason",
-            "type": {
-              "defined": {
-                "name": "fraudReason"
+            'name': 'reason',
+            'type': {
+              'defined': {
+                'name': 'fraudReason'
               }
             }
           },
           {
-            "name": "reportedAt",
-            "type": "i64"
+            'name': 'reportedAt',
+            'type': 'i64'
           }
         ]
       }
     },
     {
-      "name": "fraudPenaltyApplied",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'fraudPenaltyApplied',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "payer",
-            "type": "pubkey"
+            'name': 'payer',
+            'type': 'pubkey'
           },
           {
-            "name": "slashedAmount",
-            "type": "u64"
+            'name': 'slashedAmount',
+            'type': 'u64'
           },
           {
-            "name": "newReputation",
-            "type": "u16"
+            'name': 'newReputation',
+            'type': 'u16'
           },
           {
-            "name": "fraudCount",
-            "type": "u32"
+            'name': 'fraudCount',
+            'type': 'u32'
           }
         ]
       }
     },
     {
-      "name": "fraudReason",
-      "type": {
-        "kind": "enum",
-        "variants": [
+      'name': 'fraudReason',
+      'type': {
+        'kind': 'enum',
+        'variants': [
           {
-            "name": "duplicateBundle"
+            'name': 'duplicateBundle'
           },
           {
-            "name": "invalidAttestation"
+            'name': 'invalidAttestation'
           },
           {
-            "name": "other"
+            'name': 'other'
           }
         ]
       }
     },
     {
-      "name": "fraudRecord",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'fraudRecord',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "bundleHash",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'bundleHash',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "conflictingHash",
-            "type": {
-              "array": [
-                "u8",
+            'name': 'conflictingHash',
+            'type': {
+              'array': [
+                'u8',
                 32
               ]
             }
           },
           {
-            "name": "reporter",
-            "type": "pubkey"
+            'name': 'reporter',
+            'type': 'pubkey'
           },
           {
-            "name": "reportedAt",
-            "type": "i64"
+            'name': 'reportedAt',
+            'type': 'i64'
           },
           {
-            "name": "reason",
-            "type": {
-              "defined": {
-                "name": "fraudReason"
+            'name': 'reason',
+            'type': {
+              'defined': {
+                'name': 'fraudReason'
               }
             }
           }
@@ -969,157 +969,157 @@ export type Beam = {
       }
     },
     {
-      "name": "nonceRegistry",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'nonceRegistry',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "owner",
-            "type": "pubkey"
+            'name': 'owner',
+            'type': 'pubkey'
           },
           {
-            "name": "lastNonce",
-            "type": "u64"
+            'name': 'lastNonce',
+            'type': 'u64'
           },
           {
-            "name": "recentBundleHashes",
-            "type": {
-              "vec": {
-                "array": [
-                  "u8",
+            'name': 'recentBundleHashes',
+            'type': {
+              'vec': {
+                'array': [
+                  'u8',
                   32
                 ]
               }
             }
           },
           {
-            "name": "bundleHistory",
-            "type": {
-              "vec": {
-                "defined": {
-                  "name": "bundleRecord"
+            'name': 'bundleHistory',
+            'type': {
+              'vec': {
+                'defined': {
+                  'name': 'bundleRecord'
                 }
               }
             }
           },
           {
-            "name": "fraudRecords",
-            "type": {
-              "vec": {
-                "defined": {
-                  "name": "fraudRecord"
+            'name': 'fraudRecords',
+            'type': {
+              'vec': {
+                'defined': {
+                  'name': 'fraudRecord'
                 }
               }
             }
           },
           {
-            "name": "bump",
-            "type": "u8"
+            'name': 'bump',
+            'type': 'u8'
           }
         ]
       }
     },
     {
-      "name": "offlineEscrowAccount",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'offlineEscrowAccount',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "owner",
-            "type": "pubkey"
+            'name': 'owner',
+            'type': 'pubkey'
           },
           {
-            "name": "escrowTokenAccount",
-            "type": "pubkey"
+            'name': 'escrowTokenAccount',
+            'type': 'pubkey'
           },
           {
-            "name": "escrowBalance",
-            "type": "u64"
+            'name': 'escrowBalance',
+            'type': 'u64'
           },
           {
-            "name": "lastNonce",
-            "type": "u64"
+            'name': 'lastNonce',
+            'type': 'u64'
           },
           {
-            "name": "reputationScore",
-            "type": "u16"
+            'name': 'reputationScore',
+            'type': 'u16'
           },
           {
-            "name": "totalSpent",
-            "type": "u64"
+            'name': 'totalSpent',
+            'type': 'u64'
           },
           {
-            "name": "createdAt",
-            "type": "i64"
+            'name': 'createdAt',
+            'type': 'i64'
           },
           {
-            "name": "bump",
-            "type": "u8"
+            'name': 'bump',
+            'type': 'u8'
           },
           {
-            "name": "stakeLocked",
-            "type": "u64"
+            'name': 'stakeLocked',
+            'type': 'u64'
           },
           {
-            "name": "fraudCount",
-            "type": "u32"
+            'name': 'fraudCount',
+            'type': 'u32'
           },
           {
-            "name": "lastFraudTimestamp",
-            "type": "i64"
+            'name': 'lastFraudTimestamp',
+            'type': 'i64'
           }
         ]
       }
     },
     {
-      "name": "paymentSettled",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'paymentSettled',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "payer",
-            "type": "pubkey"
+            'name': 'payer',
+            'type': 'pubkey'
           },
           {
-            "name": "merchant",
-            "type": "pubkey"
+            'name': 'merchant',
+            'type': 'pubkey'
           },
           {
-            "name": "amount",
-            "type": "u64"
+            'name': 'amount',
+            'type': 'u64'
           },
           {
-            "name": "nonce",
-            "type": "u64"
+            'name': 'nonce',
+            'type': 'u64'
           },
           {
-            "name": "bundleId",
-            "type": "string"
+            'name': 'bundleId',
+            'type': 'string'
           }
         ]
       }
     },
     {
-      "name": "settlementEvidence",
-      "type": {
-        "kind": "struct",
-        "fields": [
+      'name': 'settlementEvidence',
+      'type': {
+        'kind': 'struct',
+        'fields': [
           {
-            "name": "payerProof",
-            "type": {
-              "option": {
-                "defined": {
-                  "name": "attestationProof"
+            'name': 'payerProof',
+            'type': {
+              'option': {
+                'defined': {
+                  'name': 'attestationProof'
                 }
               }
             }
           },
           {
-            "name": "merchantProof",
-            "type": {
-              "option": {
-                "defined": {
-                  "name": "attestationProof"
+            'name': 'merchantProof',
+            'type': {
+              'option': {
+                'defined': {
+                  'name': 'attestationProof'
                 }
               }
             }

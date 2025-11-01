@@ -77,10 +77,10 @@
  */
 
 import { Connection, PublicKey, Transaction, SystemProgram, Commitment } from '@solana/web3.js';
-import { Program, AnchorProvider, Idl } from '@coral-xyz/anchor';
+import { Program, AnchorProvider } from '@coral-xyz/anchor';
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { Buffer } from 'buffer';
-import BeamIDL from '../idl/beam.json';
+
 import { Config } from '../config';
 import type { BeamSigner } from '../wallet/WalletManager';
 import {

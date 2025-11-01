@@ -254,6 +254,19 @@ class AutoSettlementService {
         settledAt: Date.now(),
       });
 
+      try {
+        if (isPayer) {
+          await bundleTransactionManager.deleteBundle(bundle.tx_id);
+        } else if (isMerchant) {
+          await bundleTransactionManager.deleteMerchantReceipt(bundle.tx_id);
+        }
+      } catch (cleanupErr) {
+        console.warn(
+          `[AutoSettlement] Failed to purge local bundle ${bundle.tx_id} after settlement:`,
+          cleanupErr,
+        );
+      }
+
       this.notifyListeners({
         type: 'settlement_success',
         bundleId: bundle.tx_id,

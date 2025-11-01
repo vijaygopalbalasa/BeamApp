@@ -143,6 +143,8 @@ export const Config = {
     serviceUUID: '00006265-0000-1000-8000-00805f9b34fb',
     bundleCharUUID: '000062b1-0000-1000-8000-00805f9b34fb',
     responseCharUUID: '000062b2-0000-1000-8000-00805f9b34fb',
+    dhPublicKeyCharUUID: '000062b3-0000-1000-8000-00805f9b34fb', // New DH Public Key Characteristic
+    dhExchangeStatusCharUUID: '000062b4-0000-1000-8000-00805f9b34fb', // New DH Exchange Status Characteristic
     deviceNamePrefix: 'Beam-',
     scanTimeout: 15000,
   },

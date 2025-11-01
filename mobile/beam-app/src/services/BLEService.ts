@@ -1,9 +1,8 @@
-import { BleManager, Device } from 'react-native-ble-plx';
+import { BleManager, Device, BleError, Subscription, Characteristic } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
-import type { OfflineBundle } from '@beam/shared';
-import { Config } from '../config';
 import { Buffer } from 'buffer';
-import { blePeripheralService, type BLEPeripheralConfig } from './BLEPeripheralService';
+import { Config } from '../config';
+import { startAdvertising, stopAdvertising, setServices } from 'munim-bluetooth-peripheral';
 
 export interface BLEPaymentRequest {
   merchantPubkey: string;
@@ -15,95 +14,50 @@ export interface BLEPaymentRequest {
 export class BLEService {
   private manager: BleManager;
   private device: Device | null = null;
-  private isScanning: boolean = false;
+  private isScanning = false;
+  private connectionSubscription: Subscription | null = null;
 
   constructor() {
     this.manager = new BleManager();
   }
 
-  /**
-   * Request all necessary Bluetooth permissions
-   */
   async requestPermissions(): Promise<boolean> {
-    if (Platform.OS === 'android') {
-      if (Platform.Version >= 31) {
-        // Android 12+
-        const granted = await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ]);
-
-        return (
-          granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-          granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED &&
-          granted['android.permission.BLUETOOTH_ADVERTISE'] === PermissionsAndroid.RESULTS.GRANTED &&
-          granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED
-        );
-      } else {
-        // Android 11 and below
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-        );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      }
+    if (Platform.OS !== 'android') {
+      return true;
     }
-    // iOS permissions handled automatically
-    return true;
+
+    const apiLevel = Platform.Version;
+
+    if (apiLevel >= 31) {
+      const granted = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE,
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      ]);
+
+      return (
+        granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
+        granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED &&
+        granted['android.permission.BLUETOOTH_ADVERTISE'] === PermissionsAndroid.RESULTS.GRANTED &&
+        granted['android.permission.ACCESS_FINE_LOCATION'] === PermissionsAndroid.RESULTS.GRANTED
+      );
+    }
+
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    );
+    return granted === PermissionsAndroid.RESULTS.GRANTED;
   }
 
-  /**
-   * Check if Bluetooth is enabled
-   */
   async isBluetoothEnabled(): Promise<boolean> {
     const state = await this.manager.state();
     return state === 'PoweredOn';
   }
 
-  /**
-   * Merchant: Start advertising for offline payments
-   */
-  async startAdvertising(
-    merchantPubkey: string,
-    merchantName: string,
-    paymentRequest?: {
-      amount: number;
-      currency: string;
-      description?: string;
-      metadata?: Record<string, any>;
-    }
-  ): Promise<void> {
-    const hasPermission = await this.requestPermissions();
-    if (!hasPermission) {
-      throw new Error('Bluetooth permissions not granted');
-    }
-
-    const bluetoothEnabled = await this.isBluetoothEnabled();
-    if (!bluetoothEnabled) {
-      throw new Error('Please enable Bluetooth to accept payments');
-    }
-
-    // Use the enhanced BLE peripheral service
-    const config: BLEPeripheralConfig = {
-      merchantPubkey,
-      merchantName,
-      paymentRequest,
-    };
-
-    await blePeripheralService.startAdvertising(config);
-
-    if (__DEV__) {
-      console.log('[BLE] Started advertising as merchant:', merchantName);
-    }
-  }
-
-  /**
-   * Customer: Scan for nearby merchants
-   */
   async scanForMerchants(
     onMerchantFound: (device: Device, paymentRequest: BLEPaymentRequest) => void,
-    timeout: number = 15000
+    timeout: number = 15000,
   ): Promise<void> {
     const hasPermission = await this.requestPermissions();
     if (!hasPermission) {
@@ -116,170 +70,46 @@ export class BLEService {
     }
 
     if (this.isScanning) {
-      if (__DEV__) {
-        console.log('[BLE] Already scanning, stopping previous scan');
-      }
       this.stopScanning();
     }
 
-    return new Promise((resolve, reject) => {
-      if (__DEV__) {
-        console.log('[BLE] Starting scan for merchants...');
-      }
-      this.isScanning = true;
-
-      const scanTimeout = setTimeout(() => {
-        if (__DEV__) {
-          console.log('[BLE] Scan timeout reached');
+    this.isScanning = true;
+    this.manager.startDeviceScan(
+      [Config.ble.serviceUUID],
+      { allowDuplicates: false },
+      (error: BleError | null, device: Device | null) => {
+        if (error) {
+          console.error('[BLE] Scan error:', error);
+          this.stopScanning();
+          return;
         }
+
+        if (!device) {
+          return;
+        }
+
+        const paymentRequest = this.parsePaymentRequest(device);
+        if (paymentRequest) {
+          onMerchantFound(device, paymentRequest);
+        }
+      },
+    );
+
+    setTimeout(() => {
+      if (this.isScanning) {
         this.stopScanning();
-        resolve();
-      }, timeout);
-
-      this.manager.startDeviceScan(
-        [Config.ble.serviceUUID],
-        {
-          allowDuplicates: false,
-          scanMode: 1, // Low latency mode
-        },
-        (error, device) => {
-          if (error) {
-            if (__DEV__) {
-              console.error('[BLE] Scan error:', error);
-            }
-            clearTimeout(scanTimeout);
-            this.isScanning = false;
-            this.manager.stopDeviceScan();
-            reject(error);
-            return;
-          }
-
-          if (device && device.name?.startsWith('Beam-')) {
-            if (__DEV__) {
-              console.log('[BLE] Found merchant device:', device.name, device.id);
-            }
-
-            try {
-              // Parse merchant info from advertisement data
-              // In production, merchant pubkey should be in advertisement data
-              // Format: serviceData should contain merchant pubkey
-
-              let merchantPubkey = '';
-              if (device.serviceData && device.serviceData[Config.ble.serviceUUID]) {
-                // Decode merchant pubkey from service data
-                const serviceData = device.serviceData[Config.ble.serviceUUID];
-                merchantPubkey = Buffer.from(serviceData, 'base64').toString('utf-8');
-              } else {
-                // Fallback: This won't work in production
-                if (__DEV__) {
-                  console.warn('[BLE] No service data found. Merchant pubkey not available.');
-                }
-                throw new Error('Invalid merchant advertisement: missing pubkey data');
-              }
-
-              // Parse merchant name from device name
-              // Format: "Beam-{merchantName}"
-              const merchantName = device.name.replace('Beam-', '') || 'Unknown Merchant';
-
-              const paymentRequest: BLEPaymentRequest = {
-                merchantPubkey,
-                merchantName,
-                amount: 10_000000, // Default 10 USDC
-                description: `Payment to ${merchantName}`,
-              };
-
-              onMerchantFound(device, paymentRequest);
-            } catch (err) {
-              if (__DEV__) {
-                console.error('[BLE] Failed to parse merchant info:', err);
-              }
-            }
-          }
-        }
-      );
-    });
+      }
+    }, timeout);
   }
 
-  /**
-   * Customer: Connect to merchant and send payment bundle
-   */
-  async sendPaymentBundle(device: Device, bundle: OfflineBundle): Promise<OfflineBundle> {
-    try {
-      if (__DEV__) {
-        console.log('[BLE] Connecting to merchant...', device.id);
-      }
-
-      // Connect with timeout
-      const connectedDevice = await device.connect({ timeout: 10000 });
-      this.device = connectedDevice;
-
-      if (__DEV__) {
-        console.log('[BLE] Discovering services...');
-      }
-      await connectedDevice.discoverAllServicesAndCharacteristics();
-
-      // Convert bundle to base64 for transmission
-      const bundleJson = JSON.stringify(bundle);
-      const base64Bundle = Buffer.from(bundleJson).toString('base64');
-
-      if (__DEV__) {
-        console.log('[BLE] Sending payment bundle...');
-      }
-
-      // Write bundle to characteristic
-      await connectedDevice.writeCharacteristicWithResponseForService(
-        Config.ble.serviceUUID,
-        Config.ble.bundleCharUUID,
-        base64Bundle
-      );
-
-      if (__DEV__) {
-        console.log('[BLE] Reading merchant response...');
-      }
-
-      // Read response (merchant-signed bundle)
-      const responseChar = await connectedDevice.readCharacteristicForService(
-        Config.ble.serviceUUID,
-        Config.ble.responseCharUUID
-      );
-
-      const responseJson = Buffer.from(responseChar.value!, 'base64').toString();
-      const signedBundle: OfflineBundle = JSON.parse(responseJson);
-
-      if (__DEV__) {
-        console.log('[BLE] Payment bundle exchanged successfully');
-      }
-
-      // Disconnect
-      await connectedDevice.cancelConnection();
-      this.device = null;
-
-      return signedBundle;
-    } catch (error) {
-      if (__DEV__) {
-        console.error('[BLE] Failed to send payment bundle:', error);
-      }
-
-      // Clean up connection
-      if (this.device) {
-        try {
-          await this.device.cancelConnection();
-        } catch {
-          // Ignore disconnect errors
-        }
-        this.device = null;
-      }
-
-      throw error;
+  stopScanning(): void {
+    if (this.isScanning) {
+      this.manager.stopDeviceScan();
+      this.isScanning = false;
     }
   }
 
-  /**
-   * Merchant: Listen for incoming payment bundles
-   */
-  async listenForPayments(
-    onPaymentReceived: (bundle: OfflineBundle) => Promise<OfflineBundle>
-  ): Promise<() => void> {
+  async startAdvertising(paymentRequest: BLEPaymentRequest): Promise<void> {
     const hasPermission = await this.requestPermissions();
     if (!hasPermission) {
       throw new Error('Bluetooth permissions not granted');
@@ -290,150 +120,156 @@ export class BLEService {
       throw new Error('Please enable Bluetooth to accept payments');
     }
 
-    // Use the enhanced BLE peripheral service
-    const unsubscribe = blePeripheralService.onBundleReceived(async event => {
-      try {
-        const bundle: OfflineBundle = JSON.parse(event.bundle);
+    try {
+      await this.stopAdvertising();
 
-        if (__DEV__) {
-          console.log('[BLE] Received payment bundle from', event.deviceAddress);
-        }
+      const payloadJson = JSON.stringify(paymentRequest);
+      const payloadBase64 = Buffer.from(payloadJson, 'utf-8').toString('base64');
 
-        // Process the bundle and get the signed response
-        const signedBundle = await onPaymentReceived(bundle);
+      setServices([
+        {
+          uuid: Config.ble.serviceUUID,
+          characteristics: [
+            {
+              uuid: Config.ble.bundleCharUUID,
+              properties: ['read', 'write', 'writeWithoutResponse'],
+              value: payloadBase64,
+            },
+            {
+              uuid: Config.ble.responseCharUUID,
+              properties: ['read', 'notify'],
+            },
+          ],
+        },
+      ]);
 
-        // Send the signed bundle back to the customer
-        await blePeripheralService.sendResponseBundle(event.deviceAddress, signedBundle);
+      await startAdvertising({
+        serviceUUIDs: [Config.ble.serviceUUID],
+        localName: `Beam-${paymentRequest.merchantName}`,
+        advertisingData: {
+          completeServiceUUIDs128: [Config.ble.serviceUUID],
+          completeLocalName: `Beam-${paymentRequest.merchantName}`,
+        },
+      });
 
-        if (__DEV__) {
-          console.log('[BLE] Sent signed bundle to', event.deviceAddress);
-        }
-      } catch (error) {
-        if (__DEV__) {
-          console.error('[BLE] Error processing payment bundle:', error);
-        }
-      }
-    });
-
-    return unsubscribe;
-  }
-
-  /**
-   * Process BLE payment exchange
-   * Note: Requires native peripheral mode implementation.
-   */
-  async simulatePaymentExchange(
-    _merchantPubkey: string,
-    _bundle: OfflineBundle
-  ): Promise<OfflineBundle> {
-    throw new Error(
-      'BLE Payment Exchange Requires Additional Setup\n\n' +
-      'BLE-based payment exchange requires native peripheral mode implementation. ' +
-      'This feature requires additional device configuration.\n\n' +
-      'Alternative payment flow:\n' +
-      '1. Use two devices\n' +
-      '2. Merchant generates QR code\n' +
-      '3. Customer scans QR code\n' +
-      '4. Payment is created offline and can be settled later'
-    );
-  }
-
-  /**
-   * Stop scanning for devices
-   */
-  stopScanning(): void {
-    if (this.isScanning) {
-      if (__DEV__) {
-        console.log('[BLE] Stopping device scan');
-      }
-      this.manager.stopDeviceScan();
-      this.isScanning = false;
+      console.log('[BLE] Started advertising as merchant:', paymentRequest.merchantName);
+    } catch (error) {
+      console.error('[BLE] Advertising error:', error);
+      throw error;
     }
   }
 
-  /**
-   * Disconnect from current device
-   */
-  async disconnect(): Promise<void> {
-    if (this.device) {
-      try {
-        if (__DEV__) {
-          console.log('[BLE] Disconnecting from device');
-        }
-        await this.device.cancelConnection();
-      } catch (err) {
-        if (__DEV__) {
-          console.error('[BLE] Disconnect error:', err);
-        }
-      } finally {
-        this.device = null;
-      }
-    }
-  }
-
-  /**
-   * Stop advertising (merchant mode)
-   */
   async stopAdvertising(): Promise<void> {
-    await blePeripheralService.stopAdvertising();
-
-    if (__DEV__) {
-      console.log('[BLE] Stopped advertising');
+    try {
+      await stopAdvertising();
+    } catch (error) {
+      console.error('[BLE] Error stopping advertising:', error);
     }
   }
 
-  /**
-   * Get connected devices (merchant mode)
-   */
-  async getConnectedDevices() {
-    return blePeripheralService.getConnectedDevices();
-  }
-
-  /**
-   * Update payment request while advertising (merchant mode)
-   */
-  async updatePaymentRequest(paymentRequest: {
-    amount: number;
-    currency: string;
-    description?: string;
-    metadata?: Record<string, any>;
-  }): Promise<void> {
-    await blePeripheralService.updatePaymentRequest(paymentRequest);
-
-    if (__DEV__) {
-      console.log('[BLE] Updated payment request');
+  async connectToDevice(deviceId: string): Promise<Device> {
+    try {
+      const device = await this.manager.connectToDevice(deviceId, { timeout: 10000 });
+      this.device = device;
+      await device.discoverAllServicesAndCharacteristics();
+      return device;
+    } catch (error) {
+      console.error('[BLE] Connection error:', error);
+      throw error;
     }
   }
 
-  /**
-   * Get advertising state
-   */
-  isAdvertisingActive(): boolean {
-    return blePeripheralService.getIsAdvertising();
+  async readPaymentRequest(): Promise<BLEPaymentRequest | null> {
+    if (!this.device) {
+      throw new Error('No device connected');
+    }
+
+    try {
+      const payload = await this.readCharacteristic(
+        Config.ble.serviceUUID,
+        Config.ble.bundleCharUUID,
+      );
+      if (!payload) {
+        return null;
+      }
+      return JSON.parse(payload) as BLEPaymentRequest;
+    } catch (error) {
+      console.error('[BLE] Failed to read payment request characteristic:', error);
+      return null;
+    }
   }
 
-  /**
-   * Cleanup all BLE resources
-   */
-  async cleanup(): Promise<void> {
+  async disconnect(): Promise<void> {
+    if (!this.device) {
+      return;
+    }
+
+    try {
+      await this.manager.cancelDeviceConnection(this.device.id);
+    } catch (error) {
+      console.error('[BLE] Disconnect error:', error);
+    } finally {
+      this.device = null;
+    }
+  }
+
+  async writeCharacteristic(
+    serviceUUID: string,
+    charUUID: string,
+    data: string,
+  ): Promise<Characteristic | null> {
+    if (!this.device) {
+      throw new Error('No device connected');
+    }
+
+    try {
+      return await this.device.writeCharacteristicWithResponseForService(
+        serviceUUID,
+        charUUID,
+        Buffer.from(data, 'utf-8').toString('base64'),
+      );
+    } catch (error) {
+      console.error('[BLE] Write characteristic error:', error);
+      return null;
+    }
+  }
+
+  async readCharacteristic(serviceUUID: string, charUUID: string): Promise<string | null> {
+    if (!this.device) {
+      throw new Error('No device connected');
+    }
+
+    try {
+      const characteristic = await this.device.readCharacteristicForService(serviceUUID, charUUID);
+      if (!characteristic.value) {
+        return null;
+      }
+      return Buffer.from(characteristic.value, 'base64').toString('utf-8');
+    } catch (error) {
+      console.error('[BLE] Read characteristic error:', error);
+      return null;
+    }
+  }
+
+  cleanup(): void {
     this.stopScanning();
-    await this.disconnect();
-    await blePeripheralService.stopAdvertising();
-    blePeripheralService.cleanup();
+    void this.disconnect();
+    this.connectionSubscription?.remove();
+    this.connectionSubscription = null;
+    this.manager.destroy();
   }
 
-  /**
-   * Get scan status
-   */
-  getIsScanning(): boolean {
-    return this.isScanning;
-  }
+  private parsePaymentRequest(device: Device): BLEPaymentRequest | null {
+    if (!device.name || !device.name.startsWith(Config.ble.deviceNamePrefix)) {
+      return null;
+    }
 
-  /**
-   * Get connected device
-   */
-  getConnectedDevice(): Device | null {
-    return this.device;
+    return {
+      merchantPubkey: '',
+      merchantName: device.name.replace(Config.ble.deviceNamePrefix, ''),
+      amount: 0,
+      description: undefined,
+    };
   }
 }
 

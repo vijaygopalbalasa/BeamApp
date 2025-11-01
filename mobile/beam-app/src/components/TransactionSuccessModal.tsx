@@ -126,13 +126,11 @@ export function TransactionSuccessModal({
 
           {/* Close Button */}
           <Button
+            label="Done"
             variant="primary"
-            size="md"
             onPress={onClose}
             style={styles.closeButton}
-          >
-            Done
-          </Button>
+          />
         </Card>
       </View>
     </Modal>

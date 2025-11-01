@@ -1,13 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import EncryptedStorage from 'react-native-encrypted-storage';
-import type { OfflineBundle, AttestationEnvelope } from '@beam/shared';
-import { bundleStorage } from './BundleStorage';
+import type { OfflineBundle, AttestationEnvelope, AttestationType } from '@beam/shared';
+import { bundleStorage, encodeOfflineBundle, decodeOfflineBundle } from './BundleStorage';
 import { attestationService } from '../services/AttestationService';
 import { attestationQueue } from '../services/AttestationQueue';
 import type { BundleMetadata } from '../native/SecureStorageBridge';
 
 const TRANSACTION_LOG_KEY = '@beam:transaction_log';
 const TRANSACTION_STATE_KEY = '@beam:transaction_state';
+const TRANSACTION_INDEX_KEY = '@beam:transaction_index';
 
 export enum BundleState {
   PENDING = 'PENDING',
@@ -60,6 +61,130 @@ export interface BundleReceiptOptions {
   payerAttestation?: AttestationEnvelope;
 }
 
+type SerializableAttestationEnvelope = {
+  bundleId: string;
+  timestamp: number;
+  nonce: number[];
+  signature: number[];
+  attestationReport: number[];
+  certificateChain: number[][];
+  deviceInfo: AttestationEnvelope['deviceInfo'];
+  attestationType?: AttestationType;
+};
+
+type SerializableBundleTransaction = Omit<BundleTransaction, 'bundle' | 'payerAttestation' | 'merchantAttestation'> & {
+  bundle?: ReturnType<typeof encodeOfflineBundle>;
+  payerAttestation?: SerializableAttestationEnvelope;
+  merchantAttestation?: SerializableAttestationEnvelope;
+};
+
+function toByteArray(value: unknown): Uint8Array | undefined {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (ArrayBuffer.isView(value)) {
+    const view = value as ArrayBufferView;
+    return new Uint8Array(view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength));
+  }
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+  if (Array.isArray(value) && value.every(item => typeof item === 'number')) {
+    return Uint8Array.from(value as number[]);
+  }
+  if (value && typeof value === 'object' && 'data' in (value as Record<string, unknown>)) {
+    return toByteArray((value as Record<string, unknown>).data);
+  }
+  return undefined;
+}
+
+function encodeAttestationForStorage(envelope?: AttestationEnvelope): SerializableAttestationEnvelope | undefined {
+  if (!envelope) {
+    return undefined;
+  }
+
+  return {
+    bundleId: envelope.bundleId,
+    timestamp: envelope.timestamp,
+    nonce: Array.from(envelope.nonce),
+    signature: Array.from(envelope.signature),
+    attestationReport: Array.from(envelope.attestationReport),
+    certificateChain: envelope.certificateChain.map(cert => Array.from(cert)),
+    deviceInfo: envelope.deviceInfo,
+    attestationType: envelope.attestationType,
+  };
+}
+
+function decodeAttestationFromStorage(value: unknown): AttestationEnvelope | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const data = value as Record<string, unknown>;
+
+  try {
+    const bundleId = typeof data.bundleId === 'string' ? data.bundleId : '';
+    const timestamp = typeof data.timestamp === 'number' ? data.timestamp : Number(data.timestamp ?? 0);
+    const nonce = toByteArray(data.nonce);
+    const signature = toByteArray(data.signature);
+    const report = toByteArray(data.attestationReport);
+    const certChainRaw = Array.isArray(data.certificateChain) ? data.certificateChain : [];
+    const certificateChain: Uint8Array[] = [];
+
+    for (const cert of certChainRaw) {
+      const certBytes = toByteArray(cert);
+      if (certBytes) {
+        certificateChain.push(certBytes);
+      } else {
+        throw new Error('Invalid certificate entry');
+      }
+    }
+
+    const deviceInfo = data.deviceInfo as AttestationEnvelope['deviceInfo'] | undefined;
+    if (!nonce || !signature || !report || certificateChain.length !== certChainRaw.length || !deviceInfo) {
+      throw new Error('Missing attestation fields');
+    }
+
+    return {
+      bundleId,
+      timestamp,
+      nonce,
+      signature,
+      attestationReport: report,
+      certificateChain,
+      deviceInfo,
+      attestationType: data.attestationType as AttestationType | undefined,
+    };
+  } catch (err) {
+    if (__DEV__) {
+      console.warn('[BundleTransactionManager] Failed to decode attestation envelope from storage:', err);
+    }
+    return undefined;
+  }
+}
+
+function serializeTransaction(transaction: BundleTransaction): SerializableBundleTransaction {
+  return {
+    ...transaction,
+    bundle: transaction.bundle ? encodeOfflineBundle(transaction.bundle) : undefined,
+    payerAttestation: encodeAttestationForStorage(transaction.payerAttestation),
+    merchantAttestation: encodeAttestationForStorage(transaction.merchantAttestation),
+  };
+}
+
+function deserializeTransaction(serialized: SerializableBundleTransaction): BundleTransaction {
+  return {
+    ...serialized,
+    retryCount: typeof serialized.retryCount === 'number' ? serialized.retryCount : Number(serialized.retryCount ?? 0),
+    lastRetryAt: typeof serialized.lastRetryAt === 'number' ? serialized.lastRetryAt : undefined,
+    bundle: serialized.bundle ? decodeOfflineBundle(serialized.bundle) : undefined,
+    payerAttestation: serialized.payerAttestation ? decodeAttestationFromStorage(serialized.payerAttestation) : undefined,
+    merchantAttestation: serialized.merchantAttestation
+      ? decodeAttestationFromStorage(serialized.merchantAttestation)
+      : undefined,
+  };
+}
+
 class BundleTransactionManager {
   private transactionLock = new Map<string, Promise<void>>();
   private recovering = false;
@@ -71,6 +196,56 @@ class BundleTransactionManager {
         console.error('Failed to recover transactions on startup:', err);
       }
     });
+  }
+
+  /**
+   * Get transaction index from AsyncStorage
+   */
+  private async getTransactionIndex(): Promise<Set<string>> {
+    try {
+      const json = await AsyncStorage.getItem(TRANSACTION_INDEX_KEY);
+      if (json) {
+        const array: string[] = JSON.parse(json);
+        return new Set(array);
+      }
+    } catch (error) {
+      if (__DEV__) {
+        console.error('Failed to load transaction index:', error);
+      }
+    }
+    return new Set();
+  }
+
+  /**
+   * Save transaction index to AsyncStorage
+   */
+  private async saveTransactionIndex(index: Set<string>): Promise<void> {
+    try {
+      const array = Array.from(index);
+      await AsyncStorage.setItem(TRANSACTION_INDEX_KEY, JSON.stringify(array));
+    } catch (error) {
+      if (__DEV__) {
+        console.error('Failed to save transaction index:', error);
+      }
+    }
+  }
+
+  /**
+   * Add transaction ID to index
+   */
+  private async addToIndex(txId: string): Promise<void> {
+    const index = await this.getTransactionIndex();
+    index.add(txId);
+    await this.saveTransactionIndex(index);
+  }
+
+  /**
+   * Remove transaction ID from index
+   */
+  private async removeFromIndex(txId: string): Promise<void> {
+    const index = await this.getTransactionIndex();
+    index.delete(txId);
+    await this.saveTransactionIndex(index);
   }
 
   /**
@@ -205,7 +380,15 @@ class BundleTransactionManager {
     const { bundle, metadata, payerAttestation } = options;
     const txId = bundle.tx_id;
 
+    if (__DEV__) {
+      console.log(`[BundleTransactionManager] storeReceivedBundle called for ${txId}`);
+    }
+
     await this.waitForLock(txId);
+    if (__DEV__) {
+      console.log(`[BundleTransactionManager] Lock acquired for ${txId}`);
+    }
+
     const lockPromise = this.executeLocked(txId, async () => {
       const transaction: BundleTransaction = {
         id: txId,
@@ -218,6 +401,10 @@ class BundleTransactionManager {
       };
 
       try {
+        if (__DEV__) {
+          console.log(`[BundleTransactionManager] Writing CREATE log for ${txId}`);
+        }
+
         // Write-ahead log
         await this.writeTransactionLog({
           transactionId: txId,
@@ -230,6 +417,10 @@ class BundleTransactionManager {
             merchantStorage: false,
           },
         });
+
+        if (__DEV__) {
+          console.log(`[BundleTransactionManager] Saving to merchant EncryptedStorage for ${txId}`);
+        }
 
         // Save to merchant's EncryptedStorage
         const MERCHANT_RECEIVED_KEY = '@beam:merchant_received';
@@ -244,6 +435,10 @@ class BundleTransactionManager {
         payments.unshift(bundle);
         await EncryptedStorage.setItem(MERCHANT_RECEIVED_KEY, JSON.stringify(payments));
 
+        if (__DEV__) {
+          console.log(`[BundleTransactionManager] Writing UPDATE log for ${txId}`);
+        }
+
         await this.writeTransactionLog({
           transactionId: txId,
           operation: 'UPDATE',
@@ -256,14 +451,24 @@ class BundleTransactionManager {
           },
         });
 
+        if (__DEV__) {
+          console.log(`[BundleTransactionManager] Calling attestationService.storeBundle for ${txId}`);
+        }
+
         // Save to SecureStorage with merchant attestation
+        // Skip attestation fetch in offline mode - will be fetched when online
         let merchantAttestation: AttestationEnvelope | undefined;
         try {
           merchantAttestation = await attestationService.storeBundle(bundle, metadata, {
             selfRole: 'merchant',
             payerAttestation,
+            skipAttestationFetch: true, // Skip in offline mode - merchant can settle later
           });
           transaction.merchantAttestation = merchantAttestation;
+
+          if (__DEV__) {
+            console.log(`[BundleTransactionManager] attestationService.storeBundle completed for ${txId}`);
+          }
         } catch (attestationError) {
           if (__DEV__) {
             console.error('Merchant attestation failed, rolling back:', attestationError);
@@ -447,8 +652,8 @@ class BundleTransactionManager {
     }
 
     try {
-      const transaction: BundleTransaction = JSON.parse(json);
-      return transaction;
+      const parsed = JSON.parse(json) as SerializableBundleTransaction;
+      return deserializeTransaction(parsed);
     } catch (err) {
       if (__DEV__) {
         console.error(`Failed to parse transaction state for ${txId}:`, err);
@@ -461,12 +666,11 @@ class BundleTransactionManager {
    * Get all transactions
    */
   async getAllTransactions(): Promise<BundleTransaction[]> {
-    const keys = await EncryptedStorage.getAllKeys();
-    const stateKeys = keys.filter(key => key.startsWith(TRANSACTION_STATE_KEY));
+    const index = await this.getTransactionIndex();
+    const txIds = Array.from(index);
 
     const transactions = await Promise.all(
-      stateKeys.map(async key => {
-        const txId = key.replace(`${TRANSACTION_STATE_KEY}:`, '');
+      txIds.map(async txId => {
         return this.getTransactionState(txId);
       })
     );
@@ -661,7 +865,9 @@ class BundleTransactionManager {
    */
   private async saveTransactionState(transaction: BundleTransaction): Promise<void> {
     const key = `${TRANSACTION_STATE_KEY}:${transaction.id}`;
-    await EncryptedStorage.setItem(key, JSON.stringify(transaction));
+    const serialized = serializeTransaction(transaction);
+    await EncryptedStorage.setItem(key, JSON.stringify(serialized));
+    await this.addToIndex(transaction.id);
   }
 
   /**
@@ -670,6 +876,7 @@ class BundleTransactionManager {
   private async deleteTransactionState(txId: string): Promise<void> {
     const key = `${TRANSACTION_STATE_KEY}:${txId}`;
     await EncryptedStorage.removeItem(key);
+    await this.removeFromIndex(txId);
   }
 
   /**
