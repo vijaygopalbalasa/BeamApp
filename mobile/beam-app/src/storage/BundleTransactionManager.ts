@@ -304,7 +304,6 @@ class BundleTransactionManager {
               selfRole,
               payerAttestation,
               merchantAttestation,
-              usePlayIntegrity: true,
             });
 
             // Update transaction with attestation

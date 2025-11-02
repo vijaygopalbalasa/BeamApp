@@ -10,7 +10,6 @@ interface SignOptions {
 }
 
 interface AttestationOptions {
-  usePlayIntegrity?: boolean;
   endpoint?: string; // Optional override for verifier endpoint
 }
 

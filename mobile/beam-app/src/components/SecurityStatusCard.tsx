@@ -6,7 +6,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, ActivityIndicator } from 'react-native';
-import { playIntegrityService } from '../services/PlayIntegrityService';
+import { keyAttestationService } from '../services/KeyAttestationService';
 import { attestationIntegration } from '../services/AttestationIntegrationService';
 import { Card } from './ui/Card';
 import { HeadingM, Body, Small } from './ui/Typography';
@@ -33,7 +33,7 @@ export const SecurityStatusCard: React.FC<SecurityStatusCardProps> = ({ onStatus
 
     try {
       // Get device security level
-      const secInfo = await playIntegrityService.checkSecurityLevel();
+      const secInfo = await keyAttestationService.checkSecurityLevel();
       setSecurityLevel(secInfo.securityLevel);
       setIsSecure(secInfo.isSecure);
 

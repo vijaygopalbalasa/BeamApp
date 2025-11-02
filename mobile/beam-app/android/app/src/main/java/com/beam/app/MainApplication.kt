@@ -15,7 +15,6 @@ import com.beam.app.modules.SecureStorageBridgePackage
 import com.beam.app.modules.QRScannerPackage
 import com.beam.app.modules.QRCodeGeneratorPackage
 import com.beam.app.bridge.MeshNetworkPackage
-import com.beam.app.bridge.PlayIntegrityPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -28,9 +27,7 @@ class MainApplication : Application(), ReactApplication {
               add(SecureStorageBridgePackage())
               add(QRScannerPackage())
               add(QRCodeGeneratorPackage())
-              // Removed BLEPeripheralPackage()
               add(MeshNetworkPackage())
-              add(PlayIntegrityPackage())
             }
 
         override fun getJSMainModuleName(): String = "index"

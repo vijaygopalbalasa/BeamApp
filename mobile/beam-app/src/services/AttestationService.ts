@@ -38,7 +38,6 @@ class AttestationService {
       payerAttestation?: AttestationEnvelope;
       merchantAttestation?: AttestationEnvelope;
       selfRole?: 'payer' | 'merchant';
-      usePlayIntegrity?: boolean;
       skipAttestationFetch?: boolean;
     } = {}
   ): Promise<AttestationEnvelope | undefined> {
@@ -71,9 +70,7 @@ class AttestationService {
     }
 
     // Fetch attestation with retry logic
-    const attestationOptions = options.usePlayIntegrity !== undefined
-      ? { usePlayIntegrity: options.usePlayIntegrity, endpoint: Config.services?.verifier }
-      : { endpoint: Config.services?.verifier };
+    const attestationOptions = { endpoint: Config.services?.verifier };
 
     const envelope = await this.fetchAttestationWithRetry(bundle.tx_id, attestationOptions);
 
@@ -93,7 +90,7 @@ class AttestationService {
    */
   private async fetchAttestationWithRetry(
     bundleId: string,
-    options?: { usePlayIntegrity?: boolean; endpoint?: string },
+    options?: { endpoint?: string },
     attemptNumber: number = 1
   ): Promise<AttestationEnvelope> {
     try {
