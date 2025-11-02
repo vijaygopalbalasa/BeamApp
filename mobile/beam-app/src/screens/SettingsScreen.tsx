@@ -14,6 +14,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Config } from '../config';
 import { useUiPrefs } from '../ui/UiPreferencesContext';
 import { InfoButton } from '../components/ui/InfoButton';
+import { Buffer } from 'buffer';
 
 interface SettingsProps { navigation: { navigate: (screen: string) => void } }
 
@@ -54,8 +55,10 @@ export function SettingsScreen({ navigation }: SettingsProps) {
     try {
       setBusy(true);
       const blob = await wallet.exportWallet(exportPass);
-      setExported(blob);
-      Alert.alert('Wallet Exported', 'Copy the backup blob and store it securely.');
+      // ✅ FIX Bug #3: Convert JSON blob to Base64 for user-friendly display
+      const base64Backup = Buffer.from(blob, 'utf8').toString('base64');
+      setExported(base64Backup);
+      Alert.alert('Wallet Exported', 'Copy the backup text and store it securely in a safe place (password manager, encrypted file, etc.).');
     } catch (e) {
       Alert.alert('Export Failed', e instanceof Error ? e.message : String(e));
     } finally {
@@ -70,7 +73,14 @@ export function SettingsScreen({ navigation }: SettingsProps) {
     }
     try {
       setBusy(true);
-      const pubkey = await wallet.importWallet(importPass, backupBlob);
+      // ✅ FIX: Decode base64 backup to JSON (inverse of export process)
+      let decryptedBackup: string;
+      try {
+        decryptedBackup = Buffer.from(backupBlob.trim(), 'base64').toString('utf8');
+      } catch (err) {
+        throw new Error('Invalid backup format. Please check that you copied the complete backup text.');
+      }
+      const pubkey = await wallet.importWallet(importPass, decryptedBackup);
       setAddress(pubkey.toBase58());
       Alert.alert('Wallet Imported', 'Your wallet has been restored.');
     } catch (e) {

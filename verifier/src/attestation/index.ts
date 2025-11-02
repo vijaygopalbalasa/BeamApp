@@ -1,6 +1,7 @@
 import bs58 from 'bs58';
 import { sha256 } from '@noble/hashes/sha256';
 import { verifyPlayIntegrityJWS, validateIntegrityPayload } from './google.js';
+import { validateKeyAttestationChain } from './key-attestation.js';
 import {
   VERIFIER_ALLOW_DEV,
   VERIFIER_ALLOW_UNSIGNED,
@@ -139,40 +140,43 @@ async function verifyPlayIntegrityAttestation(envelope: AttestationEnvelopeInput
 }
 
 async function verifyKeyAttestation(envelope: AttestationEnvelopeInput): Promise<{ valid: boolean; reason?: string }> {
-  // Key Attestation verification
-  // This is the legacy Android Key Attestation using certificate chains
+  console.log('[verifier] Verifying Android Hardware Key Attestation');
 
+  // ========== Validation ==========
   if (!envelope.certificateChain || envelope.certificateChain.length === 0) {
     return VERIFIER_ALLOW_DEV
       ? { valid: true, reason: 'dev_mode_no_cert_chain' }
       : { valid: false, reason: 'missing_cert_chain' };
   }
 
-  // For now, basic validation
-  // In production, you should:
-  // 1. Parse the X.509 certificate chain
-  // 2. Verify chain validity and root trust
-  // 3. Extract and verify attestation extension
-  // 4. Validate challenge/nonce
-  // 5. Check hardware-backed key properties
-
-  if (VERIFIER_ALLOW_DEV) {
-    console.warn('[verifier] Key attestation verification not fully implemented, allowing in dev mode');
-    return { valid: true, reason: 'dev_mode_key_attestation' };
+  if (!envelope.nonce) {
+    return { valid: false, reason: 'missing_nonce_challenge' };
   }
 
-  // Minimal validation: check that certificate chain exists and is properly formatted
   try {
-    const certCount = envelope.certificateChain.length;
-    if (certCount < 2) {
-      return { valid: false, reason: 'insufficient_cert_chain' };
+    // Use full X.509 certificate chain validator
+    const result = await validateKeyAttestationChain(
+      envelope.certificateChain,
+      envelope.nonce // Challenge must match
+    );
+
+    if (!result.valid) {
+      console.error('[verifier] Key attestation validation failed:', result.reason);
+      return { valid: false, reason: result.reason };
     }
 
-    // TODO: Implement proper certificate chain validation
-    // For now, accept if certificate chain is present
+    console.log('[verifier] ✅ Key attestation verified', {
+      securityLevel: result.securityLevel,
+      challengeVerified: !!result.challenge,
+    });
+
     return { valid: true };
-  } catch (err) {
-    return { valid: false, reason: 'cert_chain_parse_error' };
+  } catch (error) {
+    console.error('[verifier] Key attestation error:', error);
+    return {
+      valid: false,
+      reason: `key_attestation_error: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 

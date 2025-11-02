@@ -17,6 +17,10 @@ export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
     navigation.navigate('WalletCreation');
   };
 
+  const handleImportWallet = () => {
+    navigation.navigate('WalletImport');
+  };
+
   return (
     <Screen scrollable={true}>
       <View style={styles.container}>
@@ -50,6 +54,13 @@ export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
               label="Create Wallet & Get Started"
               onPress={handleGetStarted}
               style={styles.primaryButton}
+            />
+
+            <Button
+              label="Import Existing Wallet"
+              variant="ghost"
+              onPress={handleImportWallet}
+              style={styles.secondaryButton}
             />
           </Card>
         </View>

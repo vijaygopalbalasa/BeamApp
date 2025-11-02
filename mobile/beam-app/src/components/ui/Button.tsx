@@ -1,5 +1,5 @@
 import React, { useMemo, useRef } from 'react';
-import { Pressable, Text, StyleSheet, ActivityIndicator, ViewStyle, TextStyle, Animated, Easing } from 'react-native';
+import { Pressable, Text, View, StyleSheet, ActivityIndicator, ViewStyle, TextStyle, Animated, Easing } from 'react-native';
 import { palette, radius, spacing, typography } from '../../design/tokens';
 import { haptics } from '../../utils/haptics';
 
@@ -72,17 +72,25 @@ export function Button({
       android_ripple={{ color: 'rgba(255,255,255,0.08)' }}
     >
       {({ pressed: _pressed }) => (
-        <Animated.View style={animatedStyle}>
-          {loading ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <>
-              {icon && (typeof icon === 'string' ? <Text>{icon}</Text> : icon)}
-              <Text style={[styles.label, styles[`label_${variant}`], labelStyle]}>
-                {label}
-              </Text>
-            </>
-          )}
+        <Animated.View style={[styles.animatedWrapper, animatedStyle]}>
+          <View style={styles.content}>
+            {loading ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <View style={styles.contentInner}>
+                {icon ? (
+                  typeof icon === 'string' ? (
+                    <Text style={styles.iconText}>{icon}</Text>
+                  ) : (
+                    <View>{icon}</View>
+                  )
+                ) : null}
+                <Text style={[styles.label, styles[`label_${variant}`], labelStyle]}>
+                  {label}
+                </Text>
+              </View>
+            )}
+          </View>
         </Animated.View>
       )}
     </Pressable>
@@ -94,16 +102,31 @@ const styles = StyleSheet.create({
     minHeight: 52,
     borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
     // Subtle shadow for depth
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
+  },
+  animatedWrapper: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  content: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+  },
+  contentInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  iconText: {
+    color: palette.textPrimary,
   },
   primary: {
     backgroundColor: palette.primary,

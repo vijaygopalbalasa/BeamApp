@@ -405,6 +405,122 @@ class SecureStorageBridgeModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Get hardware key attestation certificates for bundle authentication
+     * Returns X.509 certificate chain as base64-encoded strings
+     *
+     * @param challenge - Base64-encoded nonce/challenge for attestation
+     */
+    @ReactMethod
+    fun getKeyAttestationCertificates(challenge: String, promise: Promise) {
+        try {
+            Log.d(TAG, "getKeyAttestationCertificates called with challenge: ${challenge.take(20)}...")
+
+            // Decode the challenge from base64
+            val challengeBytes = Base64.decode(challenge, Base64.NO_WRAP)
+
+            // Create attestation key alias (separate from wallet key for security)
+            val attestationKeyAlias = "beam_attestation_key_${System.currentTimeMillis()}"
+
+            // Check Android version for attestation support
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) {
+                promise.reject("ATTESTATION_ERROR", "Key attestation requires Android 7.0 (API 24) or higher")
+                return
+            }
+
+            val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER)
+            keyStore.load(null)
+
+            // Generate key with attestation
+            // Use EC key (secp256r1) for attestation - widely supported
+            val keyPairGenerator = KeyPairGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_EC,
+                KEYSTORE_PROVIDER
+            )
+
+            val builder = KeyGenParameterSpec.Builder(
+                attestationKeyAlias,
+                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+            )
+                .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
+                .setAttestationChallenge(challengeBytes) // ✅ This triggers hardware attestation
+
+            // Try to use StrongBox if available (Android 9+)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                try {
+                    builder.setIsStrongBoxBacked(true)
+                    Log.d(TAG, "Attempting StrongBox-backed attestation")
+                } catch (e: Exception) {
+                    Log.w(TAG, "StrongBox not available, using TEE")
+                }
+            }
+
+            keyPairGenerator.initialize(builder.build())
+            keyPairGenerator.generateKeyPair()
+
+            Log.d(TAG, "✅ Generated attestation key: $attestationKeyAlias")
+
+            // Retrieve certificate chain
+            val certChain = keyStore.getCertificateChain(attestationKeyAlias)
+            if (certChain == null || certChain.isEmpty()) {
+                promise.reject("ATTESTATION_ERROR", "Failed to retrieve certificate chain")
+                return
+            }
+
+            Log.d(TAG, "✅ Retrieved certificate chain with ${certChain.size} certificates")
+
+            // Convert certificates to base64-encoded DER format
+            val certificatesArray = Arguments.createArray()
+            for (cert in certChain) {
+                val certBytes = cert.encoded // DER-encoded X.509 certificate
+                val certBase64 = Base64.encodeToString(certBytes, Base64.NO_WRAP)
+                certificatesArray.pushString(certBase64)
+            }
+
+            // Determine security level from key properties
+            val securityLevel = try {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    // Check if key is in StrongBox by examining the generated key
+                    val privateKey = keyStore.getKey(attestationKeyAlias, null) as PrivateKey
+                    val keyFactory = KeyFactory.getInstance(privateKey.algorithm, KEYSTORE_PROVIDER)
+                    val keyInfo = keyFactory.getKeySpec(privateKey, android.security.keystore.KeyInfo::class.java)
+                    when (keyInfo.securityLevel) {
+                        android.security.keystore.KeyProperties.SECURITY_LEVEL_STRONGBOX -> "STRONGBOX"
+                        android.security.keystore.KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "TEE"
+                        else -> "SOFTWARE"
+                    }
+                } else {
+                    "TEE" // Pre-Android 9 defaults to TEE
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not determine security level: ${e.message}")
+                "UNKNOWN"
+            }
+
+            // Build response
+            val result = Arguments.createMap()
+            result.putArray("certificateChain", certificatesArray)
+            result.putString("securityLevel", securityLevel)
+            result.putString("keyAlias", attestationKeyAlias)
+            result.putInt("chainLength", certChain.size)
+
+            Log.d(TAG, "✅ Hardware attestation successful - Security level: $securityLevel, Chain length: ${certChain.size}")
+
+            // Clean up temporary attestation key after extraction
+            try {
+                keyStore.deleteEntry(attestationKeyAlias)
+                Log.d(TAG, "✅ Cleaned up temporary attestation key")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to clean up attestation key: ${e.message}")
+            }
+
+            promise.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting key attestation certificates", e)
+            promise.reject("ATTESTATION_ERROR", "Failed to get key attestation: ${e.message}", e)
+        }
+    }
+
     @ReactMethod
     fun resetWallet(promise: Promise) {
         try {

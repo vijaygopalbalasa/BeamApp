@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { View, StyleSheet, Alert } from 'react-native';
 import { Screen } from '../components/ui/Screen';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -9,6 +9,8 @@ import { palette, spacing } from '../design/tokens';
 import { wallet } from '../wallet/WalletManager';
 import { PublicKey } from '@solana/web3.js';
 import { connectionService } from '../services/ConnectionService';
+import { balanceService } from '../services/BalanceService';
+import { networkService } from '../services/NetworkService';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Config } from '../config';
@@ -41,7 +43,17 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
   const [recent, setRecent] = useState<TransactionItem[]>([]);
   const [recentLoading, setRecentLoading] = useState<boolean>(true);
 
+  // ========== FIX Bug #3: Add mutex to prevent race conditions ==========
+  const loadingRef = useRef(false);
+
   const loadBalances = useCallback(async () => {
+    // Prevent concurrent executions
+    if (loadingRef.current) {
+      console.log('[HomeScreen] ⚠️ loadBalances already in progress, skipping...');
+      return;
+    }
+    loadingRef.current = true;
+
     console.log('[HomeScreen] ========== loadBalances CALLED ==========');
     console.log('[HomeScreen] Current walletAddress state:', walletAddress);
     try {
@@ -73,81 +85,51 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       console.log('[HomeScreen] PublicKey created successfully');
 
       // Health check: quick RPC and program status + backup flag
+      // ========== FIX Bug #1: Use local variable instead of stale state ==========
+      // ========== FIX Bug #14: Add 5-second timeout to health check ==========
+      let online = false;
       try {
-        const conn = connectionService.getConnection();
-        await conn.getSlot('processed');
-        const client = new BeamProgramClient(conn);
-        const status = await client.testConnection();
+        const healthCheckPromise = (async () => {
+          const conn = connectionService.getConnection();
+          await conn.getSlot('processed');
+          const client = new BeamProgramClient(conn);
+          const status = await client.testConnection();
+          return status;
+        })();
+
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Health check timeout')), 5000)
+        );
+
+        const status = await Promise.race([healthCheckPromise, timeoutPromise]) as { connected: boolean; programExists: boolean };
+        online = status.connected; // ✅ Store in local variable
         setHealth({ rpc: status.connected, program: status.programExists });
         setHealthUpdatedAt(Date.now());
         const bu = await AsyncStorage.getItem('@beam:wallet_backed_up');
         setBackedUp(bu === 'true');
-      } catch {
+      } catch (err) {
+        console.log('[HomeScreen] Health check failed or timed out:', err);
+        online = false; // ✅ Explicitly set offline on error
         setHealth({ rpc: false, program: false });
       }
 
-      // Get both balances using reliable connection service with fallbacks
-      console.log('[HomeScreen] Calling connectionService.getAllBalances...');
-      const balances = await connectionService.getAllBalances(pubkey);
-      console.log('[HomeScreen] ✅ getAllBalances returned:', balances);
+      // ========== NEW: Use centralized BalanceService ==========
+      console.log('[HomeScreen] Fetching balances via BalanceService...');
+      console.log('[HomeScreen] Online status:', online); // ✅ Log for debugging
+      const snapshot = await balanceService.getBalance(pubkey, online);
+      console.log('[HomeScreen] ✅ BalanceService returned:', snapshot);
 
-      console.log('[HomeScreen] Setting SOL balance to:', balances.solBalance);
-      setSolBalance(balances.solBalance);
-      console.log('[HomeScreen] Setting USDC balance to:', balances.usdcBalance);
-      setUsdcBalance(balances.usdcBalance);
-      setBalancesUpdatedAt(Date.now());
+      setSolBalance(snapshot.solBalance);
+      setUsdcBalance(snapshot.usdcBalance);
+      setEscrowBalance(snapshot.escrowBalance);
+      setEscrowExists(snapshot.escrowExists);
+      setBalancesUpdatedAt(snapshot.updatedAt);
 
-      // Try to get escrow balance
-      try {
-        console.log('[HomeScreen] Attempting to fetch escrow balance...');
-        // Use existing connection from connectionService to avoid initialization issues
-        const existingConnection = connectionService.getConnection();
-        console.log('[HomeScreen] Got connection from connectionService');
-
-        // Create read-only client with existing connection
-        const readOnlyClient = new BeamProgramClient(existingConnection);
-        console.log('[HomeScreen] BeamProgramClient created successfully');
-
-        // Check if escrow account exists
-        console.log('[HomeScreen] Calling getEscrowAccount...');
-        const escrowAccount = await readOnlyClient.getEscrowAccount(pubkey);
-        console.log('[HomeScreen] getEscrowAccount returned:', escrowAccount ? 'data' : 'null');
-
-        if (escrowAccount) {
-          console.log('[HomeScreen] ✅ Escrow account exists');
-          setEscrowExists(true);
-          const decimals = Config.tokens.usdc.decimals ?? 6;
-          const scale = Math.pow(10, decimals);
-          const escrowBalanceUsdc = escrowAccount.escrowBalance / scale; // Convert to USDC
-          setEscrowBalance(escrowBalanceUsdc);
-          console.log('[HomeScreen] ✅ Escrow balance fetched:', escrowBalanceUsdc, 'USDC');
-        } else {
-          console.log('[HomeScreen] Escrow account does not exist yet');
-          setEscrowExists(false);
-          setEscrowBalance(0);
-        }
-      } catch (escrowErr) {
-        console.log('[HomeScreen] Could not fetch escrow balance:', escrowErr);
-        console.log('[HomeScreen] Error type:', typeof escrowErr);
-        console.log('[HomeScreen] Error message:', escrowErr instanceof Error ? escrowErr.message : String(escrowErr));
-        console.log('[HomeScreen] Error stack:', escrowErr instanceof Error ? escrowErr.stack : 'No stack');
-
-        // This is expected if the escrow account doesn't exist yet
-        const errorMsg = escrowErr instanceof Error ? escrowErr.message : String(escrowErr);
-        if (errorMsg.includes('Account does not exist') || errorMsg.includes('could not find account')) {
-          console.log('[HomeScreen] Escrow account not initialized yet - showing 0 balance');
-          setEscrowExists(false);
-          setEscrowBalance(0);
-        } else {
-          console.error('[HomeScreen] Unexpected escrow fetch error:', errorMsg);
-          setEscrowBalance(0);
-        }
-      }
-
-      console.log('[HomeScreen] ✅ Balances loaded successfully:', {
-        SOL: balances.solBalance,
-        USDC: balances.usdcBalance,
-        Escrow: escrowBalance,
+      console.log('[HomeScreen] ✅ All balances loaded:', {
+        SOL: snapshot.solBalance,
+        USDC: snapshot.usdcBalance,
+        Escrow: snapshot.escrowBalance,
+        PendingPayments: snapshot.pendingPayments.length,
       });
 
       // Load recent activity
@@ -166,13 +148,24 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : 'No stack trace',
       });
+
+      // ========== FIX Bug #6: Show error UI to user ==========
+      Alert.alert(
+        'Failed to Load Balances',
+        'Unable to fetch wallet balances. Please check your connection and try again.',
+        [
+          { text: 'Retry', onPress: () => loadBalances() },
+          { text: 'Dismiss', style: 'cancel' }
+        ]
+      );
       // Keep previous balances on error instead of clearing
     } finally {
       console.log('[HomeScreen] Setting loading to false');
       setLoading(false);
+      loadingRef.current = false; // ✅ Release mutex
       console.log('[HomeScreen] ========== loadBalances COMPLETED ==========');
     }
-  }, [walletAddress, escrowBalance]);
+  }, [walletAddress]); // ✅ FIX Bug #2: Removed escrowBalance dependency to prevent infinite loop
 
   // Removed useEffect - useFocusEffect already handles initial load and subsequent focus events
 
@@ -199,6 +192,17 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
       };
     }, [loadBalances])
   );
+
+  // ========== FIX Bug #4: Add network listener to auto-refresh on online ==========
+  useEffect(() => {
+    const unsubscribe = networkService.addOnlineListener((online) => {
+      if (online && walletAddress) {
+        console.log('[HomeScreen] Network came online, refreshing balances...');
+        loadBalances();
+      }
+    });
+    return unsubscribe;
+  }, [walletAddress, loadBalances]);
 
   const handlePayMerchant = () => {
     navigation.navigate('CustomerDashboard');
@@ -238,7 +242,13 @@ export function HomeScreen({ navigation }: HomeScreenProps) {
         <Card style={styles.quickActions}>
           <Button label="Pay" onPress={handlePayMerchant} style={styles.quickBtn} />
           <Button label="Receive" variant="secondary" onPress={handleReceivePayment} style={styles.quickBtn} />
-          <Button label={escrowExists ? 'Escrow' : 'Init Escrow'} variant="secondary" onPress={() => navigation.navigate('EscrowSetup')} style={styles.quickBtn} />
+          <Button
+            label={escrowExists ? 'Escrow' : 'Init Escrow'}
+            variant="secondary"
+            onPress={() => navigation.navigate('EscrowSetup')}
+            style={styles.quickBtn}
+            disabled={!escrowExists && (solBalance === null || solBalance === 0 || usdcBalance === null || usdcBalance === 0)}
+          />
         </Card>
 
         {/* Recent Activity */}

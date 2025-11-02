@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { StyleSheet, Alert, ScrollView, TextInput } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Buffer } from 'buffer';
 import { Screen } from '../components/ui/Screen';
 import { Hero } from '../components/ui/Hero';
 import { Card } from '../components/ui/Card';
@@ -70,8 +71,8 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
         throw new Error('Failed to generate backup: empty backup data');
       }
 
-      // Convert JSON to Base64 for user-friendly display (using btoa for React Native compatibility)
-      const base64Backup = btoa(unescape(encodeURIComponent(blob)));
+      // Convert JSON to Base64 for user-friendly display (React Native safe)
+      const base64Backup = Buffer.from(blob, 'utf8').toString('base64');
       setBackup(base64Backup);
       console.log('[WalletBackup] Backup set successfully');
       Alert.alert('Backup Created Successfully', 'Your wallet has been encrypted and backed up.\n\nPlease copy the backup text below and store it in a safe place (like a password manager or encrypted file).\n\nYou will need both this backup AND your passphrase to restore your wallet.');
@@ -106,6 +107,17 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
       console.error('[WalletBackup] Failed to persist backup status', error);
     }
     navigation.navigate('Funding');
+  };
+
+  const handleImportWallet = () => {
+    Alert.alert(
+      'Import Different Wallet?',
+      'Importing a different wallet will replace your current wallet. Make sure you have backed up your current wallet first.\n\nDo you want to continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Import Wallet', onPress: () => navigation.navigate('WalletImport') },
+      ]
+    );
   };
 
   return (
@@ -182,6 +194,14 @@ export function WalletBackupScreen({ navigation }: WalletBackupScreenProps) {
             <Button label="I've Saved My Backup, Continue" variant="secondary" onPress={continueNext} />
           </Card>
         ) : null}
+
+        <Card style={styles.card}>
+          <HeadingM>Already Have a Backup?</HeadingM>
+          <Body style={styles.instructions}>
+            If you already have a wallet backup from another device, you can import it here.
+          </Body>
+          <Button label="Import Existing Wallet" variant="ghost" onPress={handleImportWallet} />
+        </Card>
       </ScrollView>
     </Screen>
   );

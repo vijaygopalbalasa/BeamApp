@@ -11,7 +11,7 @@
 import { networkService } from './NetworkService';
 import { bundleTransactionManager, BundleState } from '../storage/BundleTransactionManager';
 import { SettlementService } from './SettlementService';
-import { attestationService } from './AttestationService';
+import { attestationIntegration } from './AttestationIntegrationService';
 import { wallet } from '../wallet/WalletManager';
 import type { OfflineBundle, AttestationEnvelope } from '@beam/shared';
 
@@ -147,14 +147,7 @@ class AutoSettlementService {
     if (!finalPayerAttestation) {
       console.log(`[AutoSettlement] Fetching payer attestation for ${bundle.tx_id}...`);
       try {
-        finalPayerAttestation = await attestationService.getAttestation(
-          bundle.tx_id,
-          bundle.payer_pubkey,
-          bundle.merchant_pubkey,
-          bundle.token.amount,
-          bundle.nonce,
-          'payer'
-        );
+        finalPayerAttestation = await attestationIntegration.createAttestation(bundle);
         console.log('[AutoSettlement] ✅ Payer attestation fetched');
 
         // Update stored bundle with attestation
@@ -178,14 +171,7 @@ class AutoSettlementService {
     if (!finalMerchantAttestation) {
       console.log(`[AutoSettlement] Attempting to fetch merchant attestation for ${bundle.tx_id}...`);
       try {
-        finalMerchantAttestation = await attestationService.getAttestation(
-          bundle.tx_id,
-          bundle.payer_pubkey,
-          bundle.merchant_pubkey,
-          bundle.token.amount,
-          bundle.nonce,
-          'merchant'
-        );
+        finalMerchantAttestation = await attestationIntegration.createAttestation(bundle);
         console.log('[AutoSettlement] ✅ Merchant attestation fetched');
 
         await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.ATTESTED, {

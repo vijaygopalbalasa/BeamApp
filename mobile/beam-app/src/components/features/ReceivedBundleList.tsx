@@ -17,24 +17,16 @@ export interface ReceivedBundleListItem {
 
 interface ReceivedBundleListProps {
   items: ReceivedBundleListItem[];
-  onReport?: (item: ReceivedBundleListItem) => void;
-  onShare?: (item: ReceivedBundleListItem) => void;
-  onRemove?: (item: ReceivedBundleListItem) => void;
 }
 
-export function ReceivedBundleList({ items, onReport, onShare, onRemove }: ReceivedBundleListProps) {
+export function ReceivedBundleList({ items }: ReceivedBundleListProps) {
   const keyExtractor = useCallback((item: ReceivedBundleListItem) => item.bundle.tx_id, []);
   const renderSeparator = useCallback(() => <View style={styles.separator} />, []);
   const renderItem = useCallback<ListRenderItem<ReceivedBundleListItem>>(
     ({ item }) => (
-      <ReceivedBundleCard
-        item={item}
-        onReport={onReport}
-        onShare={onShare}
-        onRemove={onRemove}
-      />
+      <ReceivedBundleCard item={item} />
     ),
-    [onReport, onShare, onRemove],
+    [],
   );
 
   if (items.length === 0) {
@@ -58,17 +50,7 @@ export function ReceivedBundleList({ items, onReport, onShare, onRemove }: Recei
   );
 }
 
-function ReceivedBundleCard({
-  item,
-  onReport,
-  onShare,
-  onRemove,
-}: {
-  item: ReceivedBundleListItem;
-  onReport?: (item: ReceivedBundleListItem) => void;
-  onShare?: (item: ReceivedBundleListItem) => void;
-  onRemove?: (item: ReceivedBundleListItem) => void;
-}) {
+function ReceivedBundleCard({ item }: { item: ReceivedBundleListItem }) {
   const { bundle, state, updatedAt, error } = item;
   const amount = bundle.token?.amount ? bundle.token.amount / 1_000_000 : 0;
   const timestamp = new Date(updatedAt ?? bundle.timestamp).toLocaleString();
@@ -95,38 +77,6 @@ function ReceivedBundleCard({
 
       {error ? (
         <Small style={styles.errorText}>⚠️ {error}</Small>
-      ) : null}
-
-      {(onReport || onShare || onRemove) ? (
-        <View style={styles.actions}>
-          {onShare ? (
-            <Button
-              label="Show fallback QR"
-              icon="📲"
-              variant="secondary"
-              onPress={() => onShare(item)}
-              style={styles.actionButton}
-            />
-          ) : null}
-          {onReport ? (
-            <Button
-              label="Report issue"
-              icon="🚨"
-              variant="primary"
-              onPress={() => onReport(item)}
-              style={styles.actionButton}
-            />
-          ) : null}
-          {onRemove ? (
-            <Button
-              label="Remove"
-              icon="🗑️"
-              variant="ghost"
-              onPress={() => onRemove(item)}
-              style={styles.actionButton}
-            />
-          ) : null}
-        </View>
       ) : null}
     </Card>
   );
@@ -198,14 +148,5 @@ const styles = StyleSheet.create({
   errorText: {
     color: palette.textSecondary,
     marginTop: spacing.xs,
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  actionButton: {
-    flexGrow: 1,
   },
 });

@@ -7,6 +7,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { UiPreferencesProvider } from './ui/UiPreferencesContext';
 import { WelcomeScreen } from './screens/WelcomeScreen';
 import { WalletCreationScreen } from './screens/WalletCreationScreen';
+import { WalletImportScreen } from './screens/WalletImportScreen';
 import { FundingScreen } from './screens/FundingScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { WalletBackupScreen } from './screens/WalletBackupScreen';
@@ -24,6 +25,7 @@ import { attestationQueue } from './services/AttestationQueue';
 export type RootStackParamList = {
   Welcome: undefined;
   WalletCreation: undefined;
+  WalletImport: undefined;
   WalletBackup: undefined;
   WalletQR: undefined;
   Transactions: undefined;
@@ -123,6 +125,7 @@ export default function App() {
         >
           <Stack.Screen name="Welcome" component={WelcomeScreen} />
           <Stack.Screen name="WalletCreation" component={WalletCreationScreen} />
+          <Stack.Screen name="WalletImport" component={WalletImportScreen} />
           <Stack.Screen name="WalletBackup" component={WalletBackupScreen} />
           <Stack.Screen name="WalletQR" component={WalletQRScreen} />
           <Stack.Screen name="Transactions" component={TransactionsScreen} />

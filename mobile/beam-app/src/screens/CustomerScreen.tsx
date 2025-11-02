@@ -6,6 +6,7 @@ import { createUnsignedBundle, serializeBundle } from '@beam/shared';
 import type { OfflineBundle } from '@beam/shared';
 import { sha256 } from '@noble/hashes/sha256';
 import { SettlementService } from '../services/SettlementService';
+import { balanceService } from '../services/BalanceService';
 import { bundleStorage } from '../storage/BundleStorage';
 import { bundleTransactionManager, BundleState } from '../storage/BundleTransactionManager';
 import { PublicKey } from '@solana/web3.js';
@@ -72,8 +73,6 @@ const OFFLINE_FAILURE_TIPS = [
   'Confirm Bluetooth and Location permissions stay enabled on both devices.',
 ];
 
-const ESCROW_CACHE_KEY = '@beam:last_customer_escrow';
-
 function buildOfflineFailureMessage(base: string): string {
   const trimmed = base.trim();
   const alreadyAnnotated = trimmed.includes('Ensure the merchant keeps the QR screen open');
@@ -116,7 +115,9 @@ export function CustomerScreen() {
   const [creatingEscrow, setCreatingEscrow] = useState(false);
   const [escrowExists, setEscrowExists] = useState(false);
   const [settlementStatus, setSettlementStatus] = useState<string>('');
-  const escrowCacheRef = useRef<{ balance: number; exists: boolean; updatedAt: number } | null>(null);
+
+  // ========== SECURITY FIX: Prevent race conditions on loadData ==========
+  const loadingDataRef = useRef(false);
 
   // NEW: Transaction Success Modal State
   const [txSuccessModal, setTxSuccessModal] = useState<{
@@ -127,56 +128,22 @@ export function CustomerScreen() {
     bundleId?: string;
   }>({ visible: false, type: 'online', amount: 0 });
 
-  const cacheEscrowState = useCallback(async (balance: number, exists: boolean) => {
-    const snapshot = {
-      balance,
-      exists,
-      updatedAt: Date.now(),
-    };
-    escrowCacheRef.current = snapshot;
-    try {
-      await AsyncStorage.setItem(ESCROW_CACHE_KEY, JSON.stringify(snapshot));
-    } catch (err) {
-      console.log('[CustomerScreen] Failed to cache escrow state:', err);
-    }
-  }, []);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const cached = await AsyncStorage.getItem(ESCROW_CACHE_KEY);
-        if (!cached) {
-          return;
-        }
-        const parsed = JSON.parse(cached) as { balance?: unknown; exists?: unknown; updatedAt?: unknown };
-        const balance = typeof parsed.balance === 'number' && Number.isFinite(parsed.balance)
-          ? parsed.balance
-          : 0;
-        const exists = Boolean(parsed.exists);
-        const snapshot = {
-          balance,
-          exists,
-          updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
-        };
-        escrowCacheRef.current = snapshot;
-        setEscrowBalance(balance);
-        setEscrowExists(exists);
-      } catch (err) {
-        console.log('[CustomerScreen] Failed to load cached escrow state:', err);
-      }
-    })();
-  }, []);
-
-
-
   const loadData = useCallback(async () => {
+    // ========== SECURITY FIX: Prevent race conditions ==========
+    if (loadingDataRef.current) {
+      console.log('[CustomerScreen] ⚠️ loadData already in progress, skipping...');
+      return;
+    }
+    loadingDataRef.current = true;
+
     console.log('[CustomerScreen] ========== loadData CALLED ==========');
     setRefreshing(true);
     try {
       // Ensure wallet is loaded from secure storage
       const walletPubkey = await wallet.loadWallet();
       console.log('[CustomerScreen] Wallet loaded:', walletPubkey?.toBase58());
-      setWalletAddress(walletPubkey?.toBase58() ?? null);
+      const walletAddr = walletPubkey?.toBase58() ?? null;
+      setWalletAddress(walletAddr);
 
       const [transactionsResult, bundlesResult] = await Promise.allSettled([
         bundleTransactionManager.getAllTransactions(),
@@ -234,8 +201,13 @@ export function CustomerScreen() {
         }
       });
 
+      // ========== FIXED: Exclude FAILED bundles from pending list ==========
       const pendingList = Array.from(pendingMap.values())
-        .filter(item => item.state !== BundleState.SETTLED && item.state !== BundleState.ROLLBACK)
+        .filter(item =>
+          item.state !== BundleState.SETTLED &&
+          item.state !== BundleState.ROLLBACK &&
+          item.state !== BundleState.FAILED  // Don't count failed bundles as pending
+        )
         .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
       console.log('[CustomerScreen] Pending bundles loaded:', pendingList.length);
@@ -253,122 +225,56 @@ export function CustomerScreen() {
       console.log('[CustomerScreen] Online status:', online);
       setIsOnline(online);
 
-      // Get wallet and escrow balances - try even if offline for better UX
+      // ========== NEW: Use centralized BalanceService ==========
       const pubkey = wallet.getPublicKey();
       if (pubkey) {
         try {
-          console.log('[CustomerScreen] Fetching balances...');
-          // Don't require biometric for read-only balance check
-          // Use a temporary connection without signer
-          const { connectionService } = require('../services/ConnectionService');
-          const connection = connectionService.getConnection();
+          console.log('[CustomerScreen] Fetching balances via BalanceService...');
+          const snapshot = await balanceService.getBalance(pubkey, online);
+          console.log('[CustomerScreen] ✅ BalanceService returned:', snapshot);
 
-          // Fetch wallet SOL balance
-          try {
-            const solBalance = await connection.getBalance(pubkey);
-            const solInSol = solBalance / 1_000_000_000; // Convert lamports to SOL
-            console.log('[CustomerScreen] ✅ SOL balance:', solInSol);
-            setWalletSolBalance(solInSol);
-          } catch (err) {
-            console.error('[CustomerScreen] Failed to fetch SOL balance:', err);
-          }
+          setWalletSolBalance(snapshot.solBalance);
+          setWalletUsdcBalance(snapshot.usdcBalance);
+          setEscrowBalance(snapshot.escrowBalance);
+          setEscrowExists(snapshot.escrowExists);
 
-          // Fetch wallet USDC balance
-          try {
-            const { getAssociatedTokenAddress } = require('@solana/spl-token');
-            const usdcMint = new PublicKey(Config.tokens.usdc.mint);
-            const ataAddress = await getAssociatedTokenAddress(usdcMint, pubkey);
+          console.log('[CustomerScreen] ✅ All balances loaded:', {
+            SOL: snapshot.solBalance,
+            USDC: snapshot.usdcBalance,
+            Escrow: snapshot.escrowBalance,
+            PendingPayments: snapshot.pendingPayments.length,
+          });
 
-            const tokenAccountInfo = await connection.getTokenAccountBalance(ataAddress);
-            const usdcAmount = tokenAccountInfo.value.uiAmount || 0;
-            console.log('[CustomerScreen] ✅ USDC balance:', usdcAmount);
-            setWalletUsdcBalance(usdcAmount);
-          } catch (err) {
-            console.log('[CustomerScreen] No USDC token account or fetch failed (non-critical):', err);
-            setWalletUsdcBalance(0);
-          }
-
-          // Try to get escrow balance - handle case where escrow doesn't exist yet
-          try {
-            console.log('[CustomerScreen] Attempting to fetch escrow balance...');
-            const { BeamProgramClient: BeamProgramClientModule } = require('../solana/BeamProgram');
-            // Create read-only client (NO SIGNER - real blockchain queries only)
-            const readOnlyClient = new BeamProgramClientModule(Config.solana.rpcUrl);
-
-            // Check if escrow account exists
-            const escrowAccount = await readOnlyClient.getEscrowAccount(pubkey);
-            if (escrowAccount) {
-              console.log('[CustomerScreen] ✅ Escrow account exists');
-              setEscrowExists(true);
-              setEscrowBalance(escrowAccount.escrowBalance);
-              console.log('[CustomerScreen] ✅ Escrow balance fetched:', escrowAccount.escrowBalance);
-              await cacheEscrowState(escrowAccount.escrowBalance, true);
-            } else {
-              console.log('[CustomerScreen] Escrow account does not exist yet');
-              setEscrowExists(false);
-              setEscrowBalance(0);
-              await cacheEscrowState(0, false);
-            }
-
-            // If we have balance, also try to get history (with auth)
-            if (online && escrowAccount) {
-              try {
-                const signer = await wallet.getSigner('Sync offline payment state');
-                if (signer) {
-                  settlementService.initializeClient(signer);
-                  const registry = await settlementService.getNonceRegistrySnapshot(pubkey, signer);
-                  if (registry) {
-                    if (registry.lastNonce > localNonce) {
-                      console.log(
-                        `[CustomerScreen] Syncing local nonce to on-chain value ${registry.lastNonce}`,
-                      );
-                      await bundleStorage.saveNonce(registry.lastNonce);
-                      wallet.setNonce(registry.lastNonce);
-                      localNonce = registry.lastNonce;
-                    }
-
-                    const recentHistory = [...registry.bundleHistory].slice(-5).reverse();
-                    const recentFraud = [...registry.fraudRecords].slice(-3).reverse();
-                    setHistory(recentHistory);
-                    setFraudRecords(recentFraud);
-                    console.log('[CustomerScreen] History loaded:', recentHistory.length, 'entries');
+          // If we have escrow and are online, sync nonce registry
+          if (online && snapshot.escrowExists) {
+            try {
+              const signer = await wallet.getSigner('Sync offline payment state');
+              if (signer) {
+                settlementService.initializeClient(signer);
+                const registry = await settlementService.getNonceRegistrySnapshot(pubkey, signer);
+                if (registry) {
+                  if (registry.lastNonce > localNonce) {
+                    console.log(
+                      `[CustomerScreen] Syncing local nonce to on-chain value ${registry.lastNonce}`,
+                    );
+                    await bundleStorage.saveNonce(registry.lastNonce);
+                    wallet.setNonce(registry.lastNonce);
+                    localNonce = registry.lastNonce;
                   }
+
+                  const recentHistory = [...registry.bundleHistory].slice(-5).reverse();
+                  const recentFraud = [...registry.fraudRecords].slice(-3).reverse();
+                  setHistory(recentHistory);
+                  setFraudRecords(recentFraud);
+                  console.log('[CustomerScreen] History loaded:', recentHistory.length, 'entries');
                 }
-              } catch (histErr) {
-                console.log('[CustomerScreen] Could not sync nonce registry (non-critical):', histErr);
               }
-            }
-          } catch (escrowErr) {
-            console.log('[CustomerScreen] Could not fetch escrow balance:', escrowErr);
-            // This is expected if the escrow account doesn't exist yet
-            const errorMsg = escrowErr instanceof Error ? escrowErr.message : String(escrowErr);
-            if (errorMsg.includes('Account does not exist') || errorMsg.includes('could not find account')) {
-              console.log('[CustomerScreen] Escrow account not initialized yet - showing 0 balance');
-              setEscrowExists(false);
-              setEscrowBalance(0);
-              await cacheEscrowState(0, false);
-            } else if (online) {
-              // Only show error if we're online and it's not an "account doesn't exist" error
-              console.error('[CustomerScreen] ❌ Unexpected escrow fetch error:', escrowErr);
-              Alert.alert(
-                'Balance Load Failed',
-                'Could not fetch escrow balance. The RPC endpoint may be unavailable.\n\nYou can still create offline payments.',
-                [{ text: 'OK' }]
-              );
-              if (escrowCacheRef.current) {
-                setEscrowExists(escrowCacheRef.current.exists);
-                setEscrowBalance(escrowCacheRef.current.balance);
-              }
-            } else {
-              console.log('[CustomerScreen] Offline - showing cached escrow balance if available');
-              if (escrowCacheRef.current) {
-                setEscrowExists(escrowCacheRef.current.exists);
-                setEscrowBalance(escrowCacheRef.current.balance);
-              }
+            } catch (histErr) {
+              console.log('[CustomerScreen] Could not sync nonce registry (non-critical):', histErr);
             }
           }
         } catch (err) {
-          console.error('[CustomerScreen] ❌ Wallet/connection error:', err);
+          console.error('[CustomerScreen] ❌ Balance fetch error:', err);
           if (online) {
             Alert.alert(
               'Error',
@@ -383,9 +289,10 @@ export function CustomerScreen() {
       Alert.alert('Error', 'Failed to load customer data. Please try again.');
     } finally {
       setRefreshing(false);
+      loadingDataRef.current = false;  // Release mutex
       console.log('[CustomerScreen] ========== loadData COMPLETED ==========');
     }
-  }, [cacheEscrowState]);
+  }, []);
 
   const waitForPeerConnection = useCallback(async (timeoutMs = 20000) => {
     if (Platform.OS !== 'android') {
@@ -592,6 +499,13 @@ export function CustomerScreen() {
     });
     return unsubscribe;
   }, [loadData]);
+
+  // ========== FIXED: Open QR scanner directly, validate AFTER scanning ==========
+  const handleScanQRPress = () => {
+    console.log('[CustomerScreen] 🔍 Opening QR scanner (balance will be validated after scan)');
+    setShowScanner(true);
+  };
+  // ========== END FIXED ==========
 
   const handleQRScan = async (qrData: string) => {
     console.log('[CustomerScreen] ========== handleQRScan CALLED ==========');
@@ -919,6 +833,56 @@ export function CustomerScreen() {
       throw new Error('Wallet not loaded');
     }
 
+    // ========== CRITICAL SECURITY CHECK: Validate Balance BEFORE Creating Payment ==========
+    // Calculate pending offline payments that haven't settled yet
+    const pendingOfflineAmount = pendingBundles.reduce((sum, item) => {
+      const state = item.state;
+      // Only count bundles that are still pending settlement (not settled or failed)
+      if (state !== BundleState.SETTLED && state !== BundleState.FAILED && state !== BundleState.ROLLBACK) {
+        return sum + (item.bundle.token?.amount ?? 0);
+      }
+      return sum;
+    }, 0);
+
+    // Convert pending and requested amounts to USDC (escrowBalance is already in USDC from BalanceService)
+    const pendingInUsdc = pendingOfflineAmount / 1_000_000;
+    const requestedInUsdc = amountInSmallestUnit / 1_000_000;
+    const availableInUsdc = escrowBalance - pendingInUsdc;
+
+    console.log('[CustomerScreen] 💰 Balance Check:', {
+      escrow: escrowBalance,
+      pending: pendingInUsdc,
+      available: availableInUsdc,
+      requested: requestedInUsdc,
+    });
+
+    if (escrowBalance <= 0) {
+      throw new Error(
+        '❌ No Escrow Balance\n\n' +
+        'You need to create and fund your escrow account before making offline payments.\n\n' +
+        'Please go online and:\n' +
+        '1. Create escrow account\n' +
+        '2. Add funds to your escrow\n' +
+        '3. Then you can make offline payments'
+      );
+    }
+
+    if (requestedInUsdc > availableInUsdc) {
+      throw new Error(
+        '❌ Insufficient Available Balance\n\n' +
+        `Escrow Balance: ${escrowBalance.toFixed(2)} USDC\n` +
+        `Pending Offline: ${pendingInUsdc.toFixed(2)} USDC\n` +
+        `Available: ${availableInUsdc.toFixed(2)} USDC\n` +
+        `Requested: ${requestedInUsdc.toFixed(2)} USDC\n\n` +
+        (pendingOfflineAmount > 0
+          ? 'You have pending offline payments. Please settle them online first or add more funds to your escrow.'
+          : 'Please add more funds to your escrow account.')
+      );
+    }
+
+    console.log('[CustomerScreen] ✅ Balance check passed - proceeding with offline payment');
+    // ========== END SECURITY CHECK ==========
+
     const meshConfig: MeshNetworkConfig = {
       serviceUUID: Config.ble.serviceUUID,
       nodeType: 'customer',
@@ -1006,6 +970,20 @@ export function CustomerScreen() {
 
       await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.QUEUED);
 
+      // ========== NEW: Add optimistic balance update ==========
+      if (walletAddress) {
+        const amountInUsdc = amountInSmallestUnit / 1_000_000;
+        await balanceService.addPendingPayment(
+          walletAddress,
+          bundle.tx_id,
+          amountInUsdc,
+          'sent'
+        );
+        console.log('[CustomerScreen] ✅ Added pending payment to balance cache:', amountInUsdc, 'USDC');
+        // Update local state to reflect the pending payment
+        setEscrowBalance(prev => Math.max(0, prev - amountInUsdc));
+      }
+
       setLastOfflineRequest(prev => {
         if (prev) {
           return { ...prev, bundle };
@@ -1076,7 +1054,9 @@ export function CustomerScreen() {
         await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.FAILED, {
           error: annotatedMessage,
         });
-        await loadData();
+        // ========== FIX Bug #8: Don't reload full data, just refresh pending list ==========
+        const bundles = await bundleStorage.loadBundles();
+        setPendingBundles(bundles.map(b => ({ bundle: b, state: BundleState.PENDING, updatedAt: b.timestamp })));
         setLastBroadcastError(annotatedMessage);
         throw new Error(annotatedMessage);
       }
@@ -1093,7 +1073,9 @@ export function CustomerScreen() {
         bundleId: bundle.tx_id,
       });
 
-      await loadData();
+      // ========== FIX Bug #8: Don't reload full data, just refresh pending list ==========
+      const bundles = await bundleStorage.loadBundles();
+      setPendingBundles(bundles.map(b => ({ bundle: b, state: BundleState.PENDING, updatedAt: b.timestamp })));
       setLastOfflineRequest(null);
       setWizardStep('complete');
       setLastBroadcastError(null);
@@ -1380,7 +1362,13 @@ export function CustomerScreen() {
     }
   };
 
-  const totalPending = pendingBundles.reduce((sum, item) => sum + (item.bundle.token?.amount ?? 0) / 1_000_000, 0);
+  // ========== FIXED: Only count actually pending bundles (exclude FAILED, SETTLED, ROLLBACK) ==========
+  const totalPending = pendingBundles.reduce((sum, item) => {
+    if (item.state !== BundleState.SETTLED && item.state !== BundleState.FAILED && item.state !== BundleState.ROLLBACK) {
+      return sum + (item.bundle.token?.amount ?? 0) / 1_000_000;
+    }
+    return sum;
+  }, 0);
   const meshQueueStatus =
     meshStatus === 'connected'
       ? 'online'
@@ -1457,7 +1445,7 @@ export function CustomerScreen() {
     case 'scan':
       wizardPrimaryAction = {
         label: 'Scan merchant QR',
-        onPress: () => setShowScanner(true),
+        onPress: handleScanQRPress, // Pre-flight balance check before opening scanner
         disabled: loading || isProcessingPayment,
       };
       break;
@@ -1586,10 +1574,45 @@ export function CustomerScreen() {
                   </View>
                 </Card>
                 <Card variant="glass" padding="md" style={styles.heroCard}>
-                  <Small style={styles.labelMuted}>Escrow Balance</Small>
+                  <Small style={styles.labelMuted}>
+                    {escrowExists ? 'Escrow Balance' : 'No Escrow Yet'}
+                  </Small>
                   <HeadingL style={{ marginTop: spacing.xs }}>
-                    ${(escrowBalance / 1_000_000).toFixed(2)} USDC
+                    ${escrowBalance.toFixed(2)} USDC
                   </HeadingL>
+
+                  {(() => {
+                    // Calculate pending offline payments (only unsettled bundles)
+                    const pendingOfflineAmount = pendingBundles.reduce((sum, item) => {
+                      const state = item.state;
+                      if (state !== BundleState.SETTLED && state !== BundleState.FAILED && state !== BundleState.ROLLBACK) {
+                        return sum + (item.bundle.token?.amount ?? 0);
+                      }
+                      return sum;
+                    }, 0);
+                    // escrowBalance is already in USDC, pendingOfflineAmount is in smallest units
+                    const pendingInUsdc = pendingOfflineAmount / 1_000_000;
+                    const availableInUsdc = escrowBalance - pendingInUsdc;
+
+                    if (escrowBalance > 0 && pendingOfflineAmount > 0) {
+                      return (
+                        <View style={{ marginTop: spacing.xs, gap: spacing.xs }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                            <Small style={styles.balanceLabel}>Pending Offline:</Small>
+                            <Small style={styles.balanceValue}>-${pendingInUsdc.toFixed(2)} USDC</Small>
+                          </View>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: palette.neutral[700], paddingTop: spacing.xs }}>
+                            <Small style={[styles.balanceLabel, { fontWeight: '600' }]}>Available:</Small>
+                            <Small style={[styles.balanceValue, { fontWeight: '600', color: availableInUsdc > 0 ? palette.success : palette.error }]}>
+                              ${availableInUsdc.toFixed(2)} USDC
+                            </Small>
+                          </View>
+                        </View>
+                      );
+                    }
+                    return null;
+                  })()}
+
                   <Body style={styles.heroSub}>
                     {escrowBalance > 0
                       ? (isOnline ? 'Live from chain' : 'Last known balance')
@@ -1932,6 +1955,13 @@ const styles = StyleSheet.create({
   balanceSub: {
     color: 'rgba(148,163,184,0.72)',
     marginTop: 2,
+  },
+  balanceLabel: {
+    color: 'rgba(148,163,184,0.82)',
+  },
+  balanceValue: {
+    color: palette.textPrimary,
+    fontWeight: '500',
   },
   helperText: {
     color: 'rgba(148,163,184,0.82)',

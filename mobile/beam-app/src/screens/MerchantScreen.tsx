@@ -15,6 +15,7 @@ import { bundleTransactionManager, BundleState } from '../storage/BundleTransact
 import { meshDiagnosticsStore } from '../services/MeshDiagnosticsStore';
 import { autoSettlementService } from '../services/AutoSettlementService';
 import { networkService } from '../services/NetworkService';
+import { balanceService } from '../services/BalanceService';
 import { BeamProgramClient } from '../solana/BeamProgram';
 import { PublicKey } from '@solana/web3.js';
 import { Screen } from '../components/ui/Screen';
@@ -346,33 +347,35 @@ export function MerchantScreen() {
     };
   }, []);
 
-  // Initialize merchant escrow balance from blockchain
+  // ========== FIX Bug #9: Use centralized BalanceService for caching ==========
+  // Initialize merchant escrow balance from blockchain (with offline caching)
   useEffect(() => {
-    if (!merchantAddress || !isOnline) {
+    if (!merchantAddress) {
       return;
     }
 
     void (async () => {
       try {
-        console.log('[MerchantScreen] Fetching merchant escrow balance...');
-        const readOnlyClient = new BeamProgramClient(
-          Config.solana.rpcUrl,
-        );
+        console.log('[MerchantScreen] Fetching merchant balances via BalanceService...');
         const merchantPubkey = new PublicKey(merchantAddress);
-        const escrowAccount = await readOnlyClient.getEscrowAccount(merchantPubkey);
 
-        if (escrowAccount) {
-          const balanceInUsdc = escrowAccount.escrowBalance / 1_000_000;
-          console.log('[MerchantScreen] Merchant escrow balance:', balanceInUsdc, 'USDC');
-          setMerchantEscrowBalance(balanceInUsdc);
-          setLastKnownBalance(balanceInUsdc);
-        } else {
-          console.log('[MerchantScreen] No escrow account found for merchant');
-          setMerchantEscrowBalance(0);
-          setLastKnownBalance(0);
-        }
+        // Use BalanceService for cached balance (works offline + online)
+        const snapshot = await balanceService.getBalance(merchantPubkey, isOnline);
+        console.log('[MerchantScreen] ✅ BalanceService returned:', snapshot);
+
+        setMerchantEscrowBalance(snapshot.escrowBalance);
+        setLastKnownBalance(snapshot.escrowBalance);
+        setMerchantUsdcBalance(snapshot.usdcBalance);
+        setLastKnownUsdcBalance(snapshot.usdcBalance);
+
+        console.log('[MerchantScreen] ✅ All balances loaded:', {
+          Escrow: snapshot.escrowBalance,
+          USDC: snapshot.usdcBalance,
+          SOL: snapshot.solBalance,
+        });
       } catch (err) {
-        console.error('[MerchantScreen] Failed to fetch merchant escrow balance:', err);
+        console.error('[MerchantScreen] Failed to fetch merchant balances:', err);
+        // Keep previous balances on error instead of clearing
       }
     })();
   }, [merchantAddress, isOnline]);
@@ -672,6 +675,17 @@ export function MerchantScreen() {
 
         await bundleTransactionManager.updateBundleState(bundle.tx_id, BundleState.QUEUED);
         await loadReceivedPayments();
+
+        // Track pending received payment (for visibility, balance updates after settlement)
+        if (merchantAddress) {
+          await balanceService.addPendingPayment(
+            merchantAddress,
+            bundle.tx_id,
+            amountUSDC,
+            'received'
+          );
+          console.log('[MerchantScreen] ✅ Added pending received payment to balance cache:', amountUSDC, 'USDC');
+        }
 
         Alert.alert(
           '💰 Payment Received!',
@@ -1093,12 +1107,7 @@ const demonstratePaymentReceived = () => {
           </Card>
         ) : null}
 
-        <ReceivedBundleList
-          items={receivedPayments}
-          onReport={reportConflict}
-          onShare={handleShareReceipt}
-          onRemove={handleRemoveReceipt}
-        />
+        <ReceivedBundleList items={receivedPayments} />
       </Card>
     </Section>
   );

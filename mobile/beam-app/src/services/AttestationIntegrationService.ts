@@ -9,7 +9,7 @@
  * 5. Return complete attestation envelope
  */
 
-import { playIntegrityService } from './PlayIntegrityService';
+import { keyAttestationService } from './KeyAttestationService';
 import { verifierService } from './VerifierService';
 import type { OfflineBundle } from '@beam/shared';
 import { sha256 } from '@noble/hashes/sha256';
@@ -35,7 +35,7 @@ export class AttestationIntegrationService {
 
     try {
       // Step 1: Get device information
-      let deviceInfo = await playIntegrityService.getDeviceInfo().catch(err => {
+      let deviceInfo = await keyAttestationService.getDeviceInfo().catch(err => {
         console.warn('[AttestationIntegration] ⚠️ Failed to get device info, using fallback', err);
         return {
           model: 'Unknown Android Device',
@@ -56,33 +56,31 @@ export class AttestationIntegrationService {
       const bundleHash = this.createBundleHash(bundle);
       console.log('[AttestationIntegration] Bundle hash:', bundleHash.substring(0, 16) + '...');
 
-      // Step 3: Generate nonce for integrity token
-      const nonceBytes = new Uint8Array(32);
-      crypto.getRandomValues(nonceBytes);
-      const nonce = Buffer.from(nonceBytes).toString('base64');
+      // Step 3: Generate challenge for key attestation
+      const challenge = keyAttestationService.generateChallenge();
+      console.log('[AttestationIntegration] Challenge generated:', challenge.substring(0, 16) + '...');
 
-      // Step 4: Request Play Integrity token
-      let integrityToken: string | null = null;
+      // Step 4: Request hardware key attestation (certificate chain)
+      let attestationCerts;
       try {
-        integrityToken = await playIntegrityService.requestIntegrityToken(nonce);
-        console.log('[AttestationIntegration] ✅ Integrity token received');
-      } catch (tokenError) {
-        if (playIntegrityService.isDevMode()) {
-          console.warn('[AttestationIntegration] ⚠️ Integrity token unavailable, using dev token');
-          integrityToken = `dev_${bundle.tx_id}_${Date.now()}`;
-        } else {
-          throw tokenError;
-        }
+        attestationCerts = await keyAttestationService.requestAttestation(challenge);
+        console.log('[AttestationIntegration] ✅ Hardware attestation certificates received', {
+          chainLength: attestationCerts.certificateChain.length,
+          securityLevel: attestationCerts.securityLevel,
+        });
+
+        // Update device info with actual security level from attestation
+        deviceInfo.securityLevel = attestationCerts.securityLevel === 'UNKNOWN' ? 'SOFTWARE' : attestationCerts.securityLevel;
+      } catch (attestError) {
+        console.error('[AttestationIntegration] ❌ Hardware attestation failed:', attestError);
+        throw new Error(`Hardware attestation failed: ${attestError instanceof Error ? attestError.message : String(attestError)}`);
       }
 
-      if (!integrityToken) {
-        throw new Error('Integrity token unavailable');
-      }
-
-      // Step 5: Request attestation from verifier backend
+      // Step 5: Request attestation signature from verifier backend
+      // Send X.509 certificate chain instead of Play Integrity token
       const envelope = await verifierService.requestAttestation({
         bundleId: bundle.tx_id,
-        deviceToken: integrityToken,
+        deviceToken: attestationCerts.certificateChain[0], // Leaf certificate
         bundleHash,
         timestamp: bundle.timestamp,
         deviceInfo: {
@@ -92,8 +90,11 @@ export class AttestationIntegrationService {
         },
         payer: bundle.payer_pubkey,
         merchant: bundle.merchant_pubkey,
-        amount: bundle.token.amount,
+        amount: bundle.token?.amount ?? 0,
         nonce: bundle.nonce,
+        // ✅ NEW: Include full certificate chain for verifier validation
+        certificateChain: attestationCerts.certificateChain,
+        challenge: attestationCerts.challenge,
       });
 
       console.log('[AttestationIntegration] ✅ Attestation envelope received');
@@ -107,6 +108,11 @@ export class AttestationIntegrationService {
       };
     } catch (error) {
       console.error('[AttestationIntegration] ❌ Failed to create attestation:', error);
+      // Improved error messaging for key attestation errors
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('not authorized') || errorMessage.includes('API 24')) {
+        throw new Error('Device does not support hardware key attestation. Requires Android 7.0 (API 24) or higher with hardware security module.');
+      }
       throw error;
     }
   }
@@ -145,16 +151,14 @@ export class AttestationIntegrationService {
 
     try {
       // Get device ID for fraud reporting
-      await playIntegrityService.getDeviceId();
+      await keyAttestationService.getDeviceId();
 
-      // Generate device token for this fraud report
-      const rand = new Uint8Array(32);
-      crypto.getRandomValues(rand);
-      const nonce = Buffer.from(rand).toString('base64');
-      const deviceToken = await playIntegrityService.requestIntegrityToken(nonce);
+      // Generate attestation for fraud report
+      const challenge = keyAttestationService.generateChallenge();
+      const attestationCerts = await keyAttestationService.requestAttestation(challenge);
 
       await verifierService.reportFraud({
-        deviceToken,
+        deviceToken: attestationCerts.certificateChain[0], // Leaf certificate
         bundleId,
         reason,
       });
@@ -178,7 +182,7 @@ export class AttestationIntegrationService {
     console.log('[AttestationIntegration] Checking device reputation');
 
     try {
-      const deviceId = await playIntegrityService.getDeviceId();
+      const deviceId = await keyAttestationService.getDeviceId();
       const reputation = await verifierService.getReputation(deviceId);
 
       console.log('[AttestationIntegration] Reputation score:', reputation.reputationScore);
