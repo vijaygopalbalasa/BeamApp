@@ -15,15 +15,20 @@ import { VERIFIER_ALLOW_DEV } from '../env.js';
 
 // Google Root CA certificate fingerprints (SHA-256)
 // These are the trusted root certificates for Android Key Attestation
+// Source: https://android.googleapis.com/attestation/root
+// Last updated: 2025-01-27
 const GOOGLE_ROOT_FINGERPRINTS = new Set([
-  // Google Hardware Attestation Root 1 (2016-2042)
-  'F6C6EC3A0DFD8E7B8D0CF50F68A9FD7B5B31DE9B3D3F8F8C0A9B1E2D3C4F5A6B',
+  // Google Hardware Attestation Root 1
+  // Subject: serialNumber=f92009e853b6b045
+  // Valid: 2022-03-20 to 2042-03-15
+  // Algorithm: RSA 4096-bit
+  'CEDB1CB6DC896AE5EC797348BCE9286753C2B38EE71CE0FBE34A9A1248800DFC',
 
-  // Google Hardware Attestation Root 2 (2019-2042)
-  '63D4B6A0C3F1E2D8B7C6A5F4E3D2C1B0A9F8E7D6C5B4A3F2E1D0C9B8A7F6E5',
-
-  // New root from Feb 2026 (valid until 2062)
-  'A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0C1D2E3F4A5B6C7D8E9F0A1B2',
+  // Google Key Attestation CA1
+  // Subject: CN=Key Attestation CA1, OU=Android, O=Google LLC, C=US
+  // Valid: 2025-07-17 to 2035-07-15
+  // Algorithm: ECDSA P-384
+  '6D9DB4CE6C5C0B293166D08986E05774A8776CEB525D9E4329520DE12BA4BCC0',
 ]);
 
 // Android Key Attestation extension OID
@@ -87,7 +92,36 @@ export async function validateKeyAttestationChain(
       }
     }
 
-    // ========== Step 3: Verify certificate chain ==========
+    // ========== Step 3: Validate certificate expiration ==========
+    const now = new Date();
+    for (let i = 0; i < certs.length; i++) {
+      const cert = certs[i];
+      const notBefore = new Date(cert.notBefore);
+      const notAfter = new Date(cert.notAfter);
+
+      if (now < notBefore) {
+        console.error(`[key-attestation] Certificate ${i} not yet valid`, {
+          notBefore: notBefore.toISOString(),
+          now: now.toISOString(),
+        });
+        return { valid: false, reason: `cert_not_yet_valid_at_index_${i}` };
+      }
+
+      if (now > notAfter) {
+        console.error(`[key-attestation] Certificate ${i} expired`, {
+          notAfter: notAfter.toISOString(),
+          now: now.toISOString(),
+        });
+        return { valid: false, reason: `cert_expired_at_index_${i}` };
+      }
+
+      console.log(`[key-attestation] ✅ Certificate ${i} validity OK`, {
+        notBefore: notBefore.toISOString(),
+        notAfter: notAfter.toISOString(),
+      });
+    }
+
+    // ========== Step 4: Verify certificate chain ==========
     // Each certificate (except root) must be signed by the next certificate
     for (let i = 0; i < certs.length - 1; i++) {
       const cert = certs[i];
@@ -110,7 +144,7 @@ export async function validateKeyAttestationChain(
       }
     }
 
-    // ========== Step 4: Verify root certificate ==========
+    // ========== Step 5: Verify root certificate ==========
     const rootCert = certs[certs.length - 1];
     const rootFingerprint = await getCertificateFingerprint(rootCert);
 
@@ -127,7 +161,7 @@ export async function validateKeyAttestationChain(
       console.log('[key-attestation] ✅ Root certificate trusted');
     }
 
-    // ========== Step 5: Extract attestation extension from leaf certificate ==========
+    // ========== Step 6: Extract attestation extension from leaf certificate ==========
     const leafCert = certs[0];
     const attestationExtension = getAttestationExtension(leafCert);
 
@@ -138,7 +172,7 @@ export async function validateKeyAttestationChain(
 
     console.log('[key-attestation] ✅ Found attestation extension');
 
-    // ========== Step 6: Parse attestation extension ==========
+    // ========== Step 7: Parse attestation extension ==========
     const attestationData = parseAttestationExtension(attestationExtension);
 
     if (!attestationData) {
@@ -151,7 +185,7 @@ export async function validateKeyAttestationChain(
       challenge: attestationData.challenge?.substring(0, 32) + '...',
     });
 
-    // ========== Step 7: Verify challenge ==========
+    // ========== Step 8: Verify challenge ==========
     const challengeBuffer = Buffer.from(expectedChallenge, 'base64');
     const attestedChallengeBuffer = attestationData.challenge
       ? Buffer.from(attestationData.challenge, 'base64')
@@ -211,6 +245,20 @@ function getAttestationExtension(cert: x509.X509Certificate): ArrayBuffer | null
 
 /**
  * Parse attestation extension to extract attestation data
+ *
+ * KeyDescription ASN.1 structure:
+ * KeyDescription ::= SEQUENCE {
+ *   attestationVersion (0)       INTEGER,
+ *   attestationSecurityLevel (1) ENUMERATED,
+ *   keyMintVersion (2)           INTEGER,
+ *   keyMintSecurityLevel (3)     ENUMERATED,
+ *   attestationChallenge (4)     OCTET_STRING,
+ *   uniqueId (5)                 OCTET_STRING,
+ *   softwareEnforced (6)         AuthorizationList,
+ *   hardwareEnforced (7)         AuthorizationList,
+ * }
+ *
+ * SecurityLevel ::= ENUMERATED { Software(0), TrustedEnvironment(1), StrongBox(2) }
  */
 function parseAttestationExtension(extensionValue: ArrayBuffer): {
   securityLevel: 'STRONGBOX' | 'TEE' | 'SOFTWARE';
@@ -218,44 +266,118 @@ function parseAttestationExtension(extensionValue: ArrayBuffer): {
   deviceInfo?: any;
 } | null {
   try {
-    // The attestation extension is ASN.1 encoded
-    // For now, simplified parsing - in production, fully parse KeyDescription structure
+    // Parse the ASN.1 structure
+    const asn1Sequence = asn1.fromBER(extensionValue);
 
-    // Try to extract security level and challenge from the extension
-    const buffer = Buffer.from(extensionValue);
-
-    // Simplified heuristic: look for security level indicators
-    // STRONGBOX = 2, TEE = 1, SOFTWARE = 0 (in attestation extension)
-    let securityLevel: 'STRONGBOX' | 'TEE' | 'SOFTWARE' = 'SOFTWARE';
-
-    // Search for security level byte (simplified - proper parsing would use ASN.1)
-    if (buffer.includes(Buffer.from([0x02]))) {
-      securityLevel = 'STRONGBOX';
-    } else if (buffer.includes(Buffer.from([0x01]))) {
-      securityLevel = 'TEE';
+    if (asn1Sequence.offset === -1) {
+      console.error('[key-attestation] Failed to parse ASN.1 structure');
+      return null;
     }
 
-    // Try to extract challenge (first 32-64 byte sequence)
-    // This is a simplified extraction - proper implementation should parse ASN.1
-    let challenge: string | undefined;
-    for (let i = 0; i < buffer.length - 32; i++) {
-      const chunk = buffer.subarray(i, i + 32);
-      // Challenge is typically 32 bytes
-      if (chunk.length === 32) {
-        challenge = Buffer.from(chunk).toString('base64');
-        break;
+    // The KeyDescription is a SEQUENCE
+    const keyDescription = asn1Sequence.result as asn1.Sequence;
+
+    if (!(keyDescription instanceof asn1.Sequence)) {
+      console.error('[key-attestation] Root element is not a SEQUENCE');
+      return null;
+    }
+
+    // Check if we have enough fields
+    if (keyDescription.valueBlock.value.length < 5) {
+      console.error('[key-attestation] Insufficient fields in KeyDescription');
+      return null;
+    }
+
+    // Extract attestationSecurityLevel (index 1)
+    const attestationSecurityLevelField = keyDescription.valueBlock.value[1];
+    let securityLevel: 'STRONGBOX' | 'TEE' | 'SOFTWARE' = 'SOFTWARE';
+
+    if (attestationSecurityLevelField instanceof asn1.Enumerated) {
+      const securityLevelValue = attestationSecurityLevelField.valueBlock.valueDec;
+
+      switch (securityLevelValue) {
+        case 0:
+          securityLevel = 'SOFTWARE';
+          break;
+        case 1:
+          securityLevel = 'TEE';
+          break;
+        case 2:
+          securityLevel = 'STRONGBOX';
+          break;
+        default:
+          console.warn('[key-attestation] Unknown security level:', securityLevelValue);
       }
     }
 
-    console.log('[key-attestation] Parsed attestation (simplified):', {
+    // Extract attestationChallenge (index 4)
+    const challengeField = keyDescription.valueBlock.value[4];
+    let challenge: string | undefined;
+
+    if (challengeField instanceof asn1.OctetString) {
+      const challengeBuffer = Buffer.from(challengeField.valueBlock.valueHexView);
+      challenge = challengeBuffer.toString('base64');
+    }
+
+    // Extract device info from softwareEnforced (index 6) and hardwareEnforced (index 7)
+    const deviceInfo: {
+      osVersion?: number;
+      osPatchLevel?: number;
+      vendorPatchLevel?: number;
+      bootPatchLevel?: number;
+    } = {};
+
+    // Parse both AuthorizationLists
+    for (let listIndex = 6; listIndex <= 7; listIndex++) {
+      if (listIndex >= keyDescription.valueBlock.value.length) continue;
+
+      const authListField = keyDescription.valueBlock.value[listIndex];
+
+      if (authListField instanceof asn1.Sequence) {
+        // AuthorizationList is a SEQUENCE of context-specific tagged values
+        for (const item of authListField.valueBlock.value) {
+          // Each item should be a context-specific constructed tag
+          if (item.idBlock && item.idBlock.tagClass === 3) { // Context-specific
+            const tagNumber = item.idBlock.tagNumber;
+
+            // Extract the INTEGER value inside the tag
+            if (item instanceof asn1.Constructed && item.valueBlock.value.length > 0) {
+              const innerValue = item.valueBlock.value[0];
+
+              if (innerValue instanceof asn1.Integer) {
+                const intValue = innerValue.valueBlock.valueDec;
+
+                switch (tagNumber) {
+                  case 705:
+                    deviceInfo.osVersion = intValue;
+                    break;
+                  case 706:
+                    deviceInfo.osPatchLevel = intValue;
+                    break;
+                  case 718:
+                    deviceInfo.vendorPatchLevel = intValue;
+                    break;
+                  case 719:
+                    deviceInfo.bootPatchLevel = intValue;
+                    break;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    console.log('[key-attestation] Parsed attestation (ASN.1):', {
       securityLevel,
       challengeExtracted: !!challenge,
+      deviceInfo,
     });
 
     return {
       securityLevel,
       challenge,
-      deviceInfo: {}, // TODO: Extract OS version, patch levels, etc.
+      deviceInfo,
     };
   } catch (error) {
     console.error('[key-attestation] Failed to parse attestation extension:', error);
