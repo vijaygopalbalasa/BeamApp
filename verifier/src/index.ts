@@ -1,14 +1,40 @@
 import express from 'express';
 import cors from 'cors';
+import { validateOrExit } from './env-validation.js';
+
+// Validate environment variables at startup
+validateOrExit();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware - CORS with proper headers
+// Allowed origins for CORS
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+  : [
+      'http://localhost:3000',
+      'http://localhost:8081', // React Native Metro
+      'https://beam-verifier.vercel.app',
+    ];
+
+// Middleware - CORS with restricted origins
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    if (ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.vercel.app')) {
+      callback(null, true);
+    } else {
+      console.warn(`[cors] Blocked request from unauthorized origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
   credentials: false
 }));
 app.use(express.json({ limit: '1mb' }));

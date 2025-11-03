@@ -63,10 +63,11 @@ function verifyApiKey(apiKey: string | undefined): boolean {
 }
 
 /**
- * Authentication middleware - checks for valid API key in Authorization header
+ * Authentication middleware - checks for valid API key
  *
- * Expected header format:
- *   Authorization: Bearer <api_key>
+ * Supported formats:
+ *   1. Authorization: Bearer <api_key>
+ *   2. x-api-key: <api_key>
  *
  * In development mode (DEV_MODE=true), authentication is bypassed with a warning.
  */
@@ -88,27 +89,35 @@ export function requireApiKey(req: Request, res: Response, next: NextFunction): 
     return;
   }
 
-  // Extract API key from Authorization header
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    res.status(401).json({
-      error: 'unauthorized',
-      message: 'Missing Authorization header'
-    });
-    return;
-  }
+  let apiKey: string | undefined;
 
-  // Parse Bearer token
-  const parts = authHeader.split(' ');
-  if (parts.length !== 2 || parts[0] !== 'Bearer') {
-    res.status(401).json({
-      error: 'unauthorized',
-      message: 'Invalid Authorization header format. Expected: Bearer <api_key>'
-    });
-    return;
-  }
+  // Try x-api-key header first (preferred for mobile apps)
+  const xApiKey = req.headers['x-api-key'];
+  if (xApiKey && typeof xApiKey === 'string') {
+    apiKey = xApiKey;
+  } else {
+    // Fallback to Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      res.status(401).json({
+        error: 'unauthorized',
+        message: 'Missing authentication. Provide x-api-key header or Authorization: Bearer <api_key>'
+      });
+      return;
+    }
 
-  const apiKey = parts[1];
+    // Parse Bearer token
+    const parts = authHeader.split(' ');
+    if (parts.length !== 2 || parts[0] !== 'Bearer') {
+      res.status(401).json({
+        error: 'unauthorized',
+        message: 'Invalid Authorization header format. Expected: Bearer <api_key>'
+      });
+      return;
+    }
+
+    apiKey = parts[1];
+  }
 
   // Verify API key
   if (!verifyApiKey(apiKey)) {
